@@ -1,0 +1,9 @@
+{
+  "name": "civ-war-online",
+  "version": "1.0.0",
+  "description": "문명 전쟁 온라인 - 웹 멀티플레이 턴제 문명 전략 게임",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}
