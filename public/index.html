@@ -83,7 +83,7 @@ input[type=number]{width:62px;padding:4px 6px}
 .ph h3{margin:0;font-size:16px}
 .ph .sub{font-size:12px;color:var(--mut)}
 .pb{padding:10px 12px 14px}
-.kv{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(54px,1fr));gap:6px}
 .kv>div{background:var(--p2);border:1px solid var(--line);border-radius:8px;padding:6px 4px;text-align:center;font-size:12px}
 .kv b{display:block;font-size:14px}
 .ulist{display:flex;flex-direction:column;gap:4px}
@@ -168,6 +168,21 @@ input[type=number]{width:62px;padding:4px 6px}
 .tac small{color:var(--mut);font-size:11.5px;line-height:1.35}
 .hint{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:10px;background:#20294a;border:1px solid #34509a;font-size:13px;margin-top:10px}
 .rres{padding:8px 10px;border-radius:10px;background:var(--p2);border:1px solid var(--line);font-size:13px;margin-top:8px}
+.ptrees{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.ptree{background:var(--p2);border:1px solid var(--line);border-radius:12px;padding:10px}
+.ptree h4{margin:0 0 2px;display:flex;align-items:center;gap:6px;font-size:15px}
+.ptree.locked{opacity:.55}
+.pol{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-radius:9px;border:1px solid var(--line);background:#0c1220;margin-top:5px;width:100%;text-align:left;justify-content:flex-start}
+.pol.got{background:#14301f;border-color:#24543a}
+.pol.next{border-color:#4a5d97;cursor:pointer}.pol.next:hover{border-color:var(--gold)}
+.pol .n{font-weight:600;font-size:13px}.pol small{display:block;color:var(--mut);font-size:11.5px}
+.govs{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}
+.govc{background:var(--p2);border:1px solid var(--line);border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:6px}
+.govc.cur{border-color:var(--gold);background:#2a2414}
+.govc.locked{opacity:.5}
+.govc small{color:var(--mut);font-size:12px}
+.era{font-size:10px;padding:1px 6px;border-radius:6px;background:#0c1220;border:1px solid var(--line);color:var(--mut);font-weight:600}
+.tcolh{font-size:11px;color:var(--mut);font-weight:700;letter-spacing:.05em;padding:0 2px 2px}
 #toast{position:fixed;left:50%;top:62px;transform:translateX(-50%);z-index:30;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none}
 #toast div{background:#182033f5;border:1px solid var(--line2);border-left:3px solid var(--gold);padding:8px 14px;border-radius:10px;font-size:13.5px;box-shadow:var(--sh);animation:fade 3.2s forwards}
 #toast div.err{border-left-color:var(--red)}
@@ -220,10 +235,12 @@ input[type=number]{width:62px;padding:4px 6px}
     <div class="stat" id="hGold"></div>
     <div class="stat" id="hSci"></div>
     <div class="stat click hideM" id="hRes"></div>
+    <div class="stat click" id="hCul"></div>
     <div class="sp"></div>
     <div class="stat hideM" id="hOnline"></div>
     <button class="ghost navb" id="bStock" style="display:none"></button>
     <button class="ghost navb" id="bTech"></button>
+    <button class="ghost navb" id="bIdeo"></button>
     <button class="ghost navb" id="bDip"></button>
     <button class="ghost navb" id="bMarket"></button>
     <button class="ghost navb" id="bRank"></button>
@@ -243,6 +260,8 @@ input[type=number]{width:62px;padding:4px 6px}
 </div>
 
 <div class="modal" id="mTech"><div class="mbox"><div class="mhead"><h2 id="techTitle"></h2><div class="sp"></div><button class="ghost" data-close></button></div><div class="mbody"><div class="mut" id="techInfo" style="margin-bottom:12px"></div><div class="tech" id="techTree"></div></div></div></div>
+<div class="modal" id="mIdeo"><div class="mbox" style="max-width:980px"><div class="mhead"><h2 id="ideoTitle"></h2><div class="sp"></div><button class="ghost" data-close></button></div>
+  <div class="tabs" id="ideoTabs"></div><div class="mbody" id="ideoBody"></div></div></div>
 <div class="modal" id="mDip"><div class="mbox" style="max-width:760px"><div class="mhead"><h2 id="dipTitle"></h2><div class="sp"></div><button class="ghost" data-close></button></div>
   <div class="tabs" id="dipTabs"></div><div class="mbody" id="dipBody"></div></div></div>
 <div class="modal" id="mDeal"><div class="mbox" style="max-width:760px"><div class="mhead"><h2 id="dealTitle"></h2><div class="sp"></div><button class="ghost" data-close></button></div><div class="mbody" id="dealBody"></div></div></div>

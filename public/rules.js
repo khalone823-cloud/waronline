@@ -51,17 +51,21 @@
     scout:     { name: '정찰병',   cost: 22,  str: 4,  moves: 3, sight: 3, desc: '빠르고 멀리 봅니다' },
     warrior:   { name: '전사',     cost: 30,  str: 8,  moves: 2, obs: 'iron' },
     archer:    { name: '궁수',     cost: 40,  str: 5,  rstr: 8,  range: 2, moves: 2, tech: 'archery', obs: 'machinery', res: { wood: 1 } },
-    spearman:  { name: '창병',     cost: 45,  str: 11, moves: 2, tech: 'bronze', anti: true, obs: 'gunpowder', res: { copper: 1 }, desc: '기마 상대 +50%' },
+    spearman:  { name: '창병',     cost: 45,  str: 11, moves: 2, tech: 'bronze', anti: true, obs: 'feudalism', res: { copper: 1 }, desc: '기마 상대 +50%' },
+    chariot:   { name: '전차',     cost: 55,  str: 10, moves: 3, mounted: true, tech: 'wheel', obs: 'chivalry', res: { horse: 1, wood: 1 } },
     horseman:  { name: '기마병',   cost: 60,  str: 12, moves: 4, mounted: true, tech: 'horseback', obs: 'chivalry', res: { horse: 1 } },
     swordsman: { name: '검사',     cost: 70,  str: 15, moves: 2, tech: 'iron', obs: 'gunpowder', res: { iron: 1 } },
     catapult:  { name: '투석기',   cost: 85,  str: 6,  rstr: 14, range: 2, moves: 2, siege: true, tech: 'math', obs: 'metallurgy', res: { wood: 2, stone: 1 }, desc: '도시 공격 2배' },
+    pikeman:   { name: '장창병',   cost: 90,  str: 18, moves: 2, tech: 'feudalism', anti: true, obs: 'rifling', res: { iron: 1, wood: 1 }, desc: '기마 상대 +50%' },
     knight:    { name: '기사',     cost: 110, str: 20, moves: 4, mounted: true, tech: 'chivalry', obs: 'military', res: { horse: 1, iron: 1 } },
     crossbow:  { name: '석궁병',   cost: 110, str: 10, rstr: 18, range: 2, moves: 2, tech: 'machinery', obs: 'rifling', res: { wood: 1, iron: 1 } },
     musketman: { name: '머스킷병', cost: 140, str: 26, moves: 2, tech: 'gunpowder', obs: 'rifling', res: { saltpeter: 1, iron: 1 } },
     cannon:    { name: '대포',     cost: 160, str: 10, rstr: 26, range: 2, moves: 2, siege: true, tech: 'metallurgy', obs: 'dynamite', res: { iron: 2, coal: 1, saltpeter: 1 }, desc: '도시 공격 2배' },
-    cavalry:   { name: '기병대',   cost: 170, str: 30, moves: 4, mounted: true, tech: 'military', res: { horse: 1, saltpeter: 1 } },
-    rifleman:  { name: '소총병',   cost: 200, str: 36, moves: 2, tech: 'rifling', res: { iron: 1, saltpeter: 1, coal: 1 } },
+    cavalry:   { name: '기병대',   cost: 170, str: 30, moves: 4, mounted: true, tech: 'military', obs: 'combustion', res: { horse: 1, saltpeter: 1 } },
+    rifleman:  { name: '소총병',   cost: 200, str: 36, moves: 2, tech: 'rifling', obs: 'replaceable', res: { iron: 1, saltpeter: 1, coal: 1 } },
     artillery: { name: '야포',     cost: 240, str: 14, rstr: 36, range: 3, moves: 2, siege: true, tech: 'dynamite', res: { iron: 2, coal: 2, saltpeter: 1 }, desc: '사거리 3, 도시 공격 2배' },
+    infantry:  { name: '보병',     cost: 280, str: 50, moves: 2, tech: 'replaceable', res: { iron: 1, coal: 1 } },
+    tank:      { name: '전차대',   cost: 360, str: 70, moves: 4, tech: 'combustion', res: { iron: 3, coal: 2 }, desc: '현대 기갑 부대' },
   };
 
   // 제작 장비 (도시에서 만들어 무기고에 보관 → 유닛에 장착)
@@ -76,45 +80,162 @@
   };
   const SLOTS = { weapon: '무기', armor: '갑옷', mount: '탈것' };
 
+  const ERAS = ['고대', '고전', '중세', '르네상스', '산업', '현대'];
+  // bonus: 연구 완료 시 영구 효과 (MOD_TEXT 참고)
   const TECHS = {
-    agriculture:  { name: '농업',       cost: 0,   req: [] },
-    pottery:      { name: '도기',       cost: 30,  req: ['agriculture'] },
-    animal:       { name: '목축',       cost: 30,  req: ['agriculture'], desc: '말 목장' },
-    archery:      { name: '궁술',       cost: 30,  req: ['agriculture'] },
-    mining:       { name: '채광',       cost: 30,  req: ['agriculture'], desc: '구리·석재·금 광산' },
-    bronze:       { name: '청동기',     cost: 55,  req: ['mining'], res: { copper: 3 }, desc: '철 광산' },
-    horseback:    { name: '기마술',     cost: 55,  req: ['animal'], res: { horse: 2 } },
-    writing:      { name: '문자',       cost: 55,  req: ['pottery'] },
-    masonry:      { name: '석공술',     cost: 55,  req: ['mining'], res: { stone: 2 } },
-    currency:     { name: '화폐',       cost: 90,  req: ['bronze'] },
-    iron:         { name: '철기',       cost: 100, req: ['bronze'], res: { iron: 3 } },
-    math:         { name: '수학',       cost: 100, req: ['writing', 'archery'] },
-    construction: { name: '건축',       cost: 120, req: ['masonry', 'math'], res: { stone: 5, wood: 5 } },
-    chivalry:     { name: '기사도',     cost: 160, req: ['horseback', 'iron'], res: { horse: 3, iron: 2 } },
-    machinery:    { name: '기계',       cost: 160, req: ['math', 'iron'], res: { wood: 4, iron: 2 }, desc: '초석 광산' },
-    education:    { name: '교육',       cost: 180, req: ['writing', 'currency'] },
-    banking:      { name: '은행업',     cost: 220, req: ['currency', 'education'] },
-    gunpowder:    { name: '화약',       cost: 250, req: ['machinery', 'education'], res: { saltpeter: 4 }, desc: '석탄 광산' },
-    metallurgy:   { name: '야금술',     cost: 300, req: ['gunpowder'], res: { coal: 4, iron: 4 } },
-    military:     { name: '군사학',     cost: 330, req: ['chivalry', 'metallurgy'], res: { horse: 4 } },
-    rifling:      { name: '강선',       cost: 380, req: ['metallurgy'], res: { iron: 4, saltpeter: 4 } },
-    industry:     { name: '산업화',     cost: 420, req: ['banking', 'metallurgy'], res: { coal: 8, iron: 8 } },
-    dynamite:     { name: '다이너마이트', cost: 460, req: ['rifling', 'industry'], res: { saltpeter: 6, coal: 6 } },
+    agriculture:     { name: '농업',       era: 0, cost: 0,   req: [] },
+    pottery:         { name: '도기',       era: 0, cost: 30,  req: ['agriculture'] },
+    animal:          { name: '목축',       era: 0, cost: 30,  req: ['agriculture'], desc: '말 목장' },
+    archery:         { name: '궁술',       era: 0, cost: 30,  req: ['agriculture'] },
+    mining:          { name: '채광',       era: 0, cost: 30,  req: ['agriculture'], desc: '구리·석재·금 광산' },
+    mysticism:       { name: '신비주의',   era: 0, cost: 45,  req: ['pottery'], bonus: { cityCul: 1 } },
+    wheel:           { name: '바퀴',       era: 0, cost: 50,  req: ['animal'] },
+    writing:         { name: '문자',       era: 0, cost: 55,  req: ['pottery'] },
+    bronze:          { name: '청동기',     era: 0, cost: 55,  req: ['mining'], res: { copper: 3 }, desc: '철 광산' },
+    horseback:       { name: '기마술',     era: 0, cost: 55,  req: ['animal'], res: { horse: 2 } },
+    masonry:         { name: '석공술',     era: 0, cost: 55,  req: ['mining'], res: { stone: 2 } },
+    code_of_laws:    { name: '법전',       era: 0, cost: 60,  req: ['writing'], bonus: { upkeepFree: 1 } },
+    currency:        { name: '화폐',       era: 1, cost: 90,  req: ['bronze'] },
+    iron:            { name: '철기',       era: 1, cost: 100, req: ['bronze'], res: { iron: 3 } },
+    math:            { name: '수학',       era: 1, cost: 100, req: ['writing', 'archery'] },
+    drama:           { name: '연극',       era: 1, cost: 100, req: ['mysticism', 'writing'] },
+    philosophy:      { name: '철학',       era: 1, cost: 120, req: ['code_of_laws', 'mysticism'], bonus: { culPct: 10 } },
+    construction:    { name: '건축',       era: 1, cost: 120, req: ['masonry', 'math'], res: { stone: 5, wood: 5 } },
+    engineering:     { name: '공학',       era: 1, cost: 130, req: ['construction', 'wheel'], bonus: { improveSpeed: 1 } },
+    chivalry:        { name: '기사도',     era: 2, cost: 160, req: ['horseback', 'iron'], res: { horse: 3, iron: 2 } },
+    machinery:       { name: '기계',       era: 2, cost: 160, req: ['math', 'iron'], res: { wood: 4, iron: 2 }, desc: '초석 광산' },
+    theology:        { name: '신학',       era: 2, cost: 170, req: ['philosophy', 'drama'] },
+    feudalism:       { name: '봉건제',     era: 2, cost: 170, req: ['code_of_laws', 'iron'] },
+    education:       { name: '교육',       era: 2, cost: 180, req: ['philosophy', 'currency'], bonus: { sciPct: 5 } },
+    civil:           { name: '행정학',     era: 2, cost: 190, req: ['education', 'feudalism'], bonus: { upkeepFree: 2, goldPct: 5 } },
+    astronomy:       { name: '천문학',     era: 2, cost: 200, req: ['education', 'math'] },
+    banking:         { name: '은행업',     era: 2, cost: 220, req: ['currency', 'education'] },
+    printing:        { name: '인쇄술',     era: 3, cost: 230, req: ['machinery', 'theology'], bonus: { sciPct: 5, culPct: 5 } },
+    gunpowder:       { name: '화약',       era: 3, cost: 250, req: ['machinery', 'education'], res: { saltpeter: 4 }, desc: '석탄 광산' },
+    architecture:    { name: '건축학',     era: 3, cost: 260, req: ['engineering', 'printing'] },
+    economics:       { name: '경제학',     era: 3, cost: 280, req: ['banking', 'printing'], bonus: { marketCut: 5 } },
+    physics:         { name: '물리학',     era: 3, cost: 280, req: ['astronomy', 'printing'], bonus: { sciPct: 5 } },
+    metallurgy:      { name: '야금술',     era: 3, cost: 300, req: ['gunpowder'], res: { coal: 4, iron: 4 } },
+    social_contract: { name: '사회계약론', era: 3, cost: 300, req: ['economics', 'civil'] },
+    military:        { name: '군사학',     era: 4, cost: 330, req: ['chivalry', 'metallurgy'], res: { horse: 4 } },
+    rifling:         { name: '강선',       era: 4, cost: 380, req: ['metallurgy'], res: { iron: 4, saltpeter: 4 } },
+    steam:           { name: '증기기관',   era: 4, cost: 400, req: ['physics', 'metallurgy'], res: { coal: 5, iron: 5 }, bonus: { stockCap: 1 } },
+    industry:        { name: '산업화',     era: 4, cost: 420, req: ['economics', 'steam'], res: { coal: 8, iron: 8 } },
+    nationalism:     { name: '민족주의',   era: 4, cost: 430, req: ['social_contract', 'military'], bonus: { defPct: 5 } },
+    medicine:        { name: '의학',       era: 4, cost: 450, req: ['physics', 'economics'], bonus: { growthPct: 10, heal: 5 } },
+    dynamite:        { name: '다이너마이트', era: 4, cost: 460, req: ['rifling', 'industry'], res: { saltpeter: 6, coal: 6 } },
+    electricity:     { name: '전기',       era: 5, cost: 520, req: ['steam', 'physics'], res: { copper: 6 }, bonus: { prodPct: 5 } },
+    ideology:        { name: '이념',       era: 5, cost: 540, req: ['nationalism', 'industry'] },
+    replaceable:     { name: '대량 징병',  era: 5, cost: 560, req: ['dynamite', 'electricity'], res: { iron: 6, coal: 4 } },
+    radio:           { name: '무선통신',   era: 5, cost: 600, req: ['electricity'], res: { copper: 6 } },
+    combustion:      { name: '내연기관',   era: 5, cost: 640, req: ['replaceable', 'steam'], res: { coal: 10, iron: 10 } },
+    computers:       { name: '컴퓨터',     era: 5, cost: 760, req: ['radio', 'medicine'], res: { copper: 10 }, bonus: { sciPct: 10 } },
+    globalization:   { name: '세계화',     era: 5, cost: 850, req: ['computers', 'ideology'], bonus: { tradeOp: 10, marketCut: 10, goldPct: 10 } },
   };
 
   const BUILDINGS = {
-    monument:   { name: '기념비',   cost: 40,  res: { stone: 2 }, desc: '영토 반경 +1, 금 +1', gold: 1 },
-    granary:    { name: '곡물창고', cost: 55,  res: { wood: 2 }, tech: 'pottery', desc: '식량 +2', food: 2 },
-    barracks:   { name: '병영',     cost: 60,  res: { wood: 3 }, tech: 'bronze', desc: '생산 유닛 전투력 +15%' },
-    library:    { name: '도서관',   cost: 70,  res: { wood: 2 }, tech: 'writing', desc: '과학 +3', sci: 3 },
-    walls:      { name: '성벽',     cost: 70,  res: { stone: 4 }, tech: 'masonry', desc: '방어 +8, 체력 +50', def: 8, hp: 50 },
-    market:     { name: '시장',     cost: 90,  res: { wood: 2 }, tech: 'currency', desc: '금 +3', gold: 3 },
-    workshop:   { name: '작업장',   cost: 100, res: { wood: 3, stone: 2 }, tech: 'construction', desc: '생산 +3', prod: 3 },
-    castle:     { name: '성',       cost: 150, res: { stone: 8 }, tech: 'chivalry', req: 'walls', desc: '방어 +10, 체력 +50', def: 10, hp: 50 },
-    university: { name: '대학',     cost: 150, res: { stone: 4 }, tech: 'education', req: 'library', desc: '과학 +5', sci: 5 },
-    bank:       { name: '은행',     cost: 180, res: { stone: 4 }, tech: 'banking', req: 'market', desc: '금 +5', gold: 5 },
-    factory:    { name: '공장',     cost: 250, res: { iron: 6, coal: 4 }, tech: 'industry', req: 'workshop', desc: '생산 +6', prod: 6 },
+    monument:       { name: '기념비',         cost: 40,  res: { stone: 2 }, desc: '영토 반경 +1, 문화 +2', cul: 2 },
+    granary:        { name: '곡물창고',       cost: 55,  res: { wood: 2 }, tech: 'pottery', desc: '식량 +2', food: 2 },
+    temple:         { name: '사원',           cost: 50,  res: { wood: 2, stone: 1 }, tech: 'mysticism', desc: '문화 +2', cul: 2 },
+    barracks:       { name: '병영',           cost: 60,  res: { wood: 3 }, tech: 'bronze', desc: '생산 유닛 전투력 +15%' },
+    library:        { name: '도서관',         cost: 70,  res: { wood: 2 }, tech: 'writing', desc: '과학 +3', sci: 3 },
+    walls:          { name: '성벽',           cost: 70,  res: { stone: 4 }, tech: 'masonry', desc: '방어 +8, 체력 +50', def: 8, hp: 50 },
+    market:         { name: '시장',           cost: 90,  res: { wood: 2 }, tech: 'currency', desc: '금 +3', gold: 3 },
+    amphitheater:   { name: '원형극장',       cost: 90,  res: { stone: 4 }, tech: 'drama', desc: '문화 +3', cul: 3 },
+    workshop:       { name: '작업장',         cost: 100, res: { wood: 3, stone: 2 }, tech: 'construction', desc: '생산 +3', prod: 3 },
+    aqueduct:       { name: '수도교',         cost: 110, res: { stone: 5 }, tech: 'engineering', desc: '식량 +3', food: 3 },
+    observatory:    { name: '천문대',         cost: 140, res: { stone: 4, wood: 2 }, tech: 'astronomy', desc: '과학 +4', sci: 4 },
+    castle:         { name: '성',             cost: 150, res: { stone: 8 }, tech: 'chivalry', req: 'walls', desc: '방어 +10, 체력 +50', def: 10, hp: 50 },
+    university:     { name: '대학',           cost: 150, res: { stone: 4 }, tech: 'education', req: 'library', desc: '과학 +5', sci: 5 },
+    printing_house: { name: '인쇄소',         cost: 150, res: { wood: 4 }, tech: 'printing', desc: '과학 +3, 문화 +1', sci: 3, cul: 1 },
+    cathedral:      { name: '대성당',         cost: 160, res: { stone: 8 }, tech: 'theology', req: 'temple', desc: '문화 +5', cul: 5 },
+    bank:           { name: '은행',           cost: 180, res: { stone: 4 }, tech: 'banking', req: 'market', desc: '금 +5', gold: 5 },
+    opera:          { name: '오페라 하우스', cost: 200, res: { stone: 6, wood: 4 }, tech: 'architecture', req: 'amphitheater', desc: '문화 +6', cul: 6 },
+    stock_exchange: { name: '증권거래소',     cost: 240, res: { stone: 6 }, tech: 'economics', req: 'bank', desc: '금 +6', gold: 6 },
+    factory:        { name: '공장',           cost: 250, res: { iron: 6, coal: 4 }, tech: 'industry', req: 'workshop', desc: '생산 +6', prod: 6 },
+    hospital:       { name: '병원',           cost: 260, res: { stone: 4, iron: 2 }, tech: 'medicine', desc: '식량 +4', food: 4 },
+    power_plant:    { name: '발전소',         cost: 320, res: { iron: 6, coal: 6, copper: 4 }, tech: 'electricity', req: 'factory', desc: '생산 +8', prod: 8 },
+    broadcast:      { name: '방송국',         cost: 340, res: { copper: 6, iron: 4 }, tech: 'radio', desc: '문화 +8', cul: 8 },
+    research_lab:   { name: '연구소',         cost: 400, res: { copper: 8, iron: 4 }, tech: 'computers', req: 'university', desc: '과학 +10', sci: 10 },
   };
+
+  // ── 정부 체제와 사상 ──
+  const MOD_TEXT = {
+    foodPct: ['식량', '%'], prodPct: ['생산', '%'], goldPct: ['금', '%'], sciPct: ['과학', '%'], culPct: ['문화', '%'],
+    capFood: ['수도 식량', ''], capProd: ['수도 생산', ''], capGold: ['수도 금', ''], capSci: ['수도 과학', ''], capCul: ['수도 문화', ''],
+    cityFood: ['모든 도시 식량', ''], cityProd: ['모든 도시 생산', ''], cityGold: ['모든 도시 금', ''], citySci: ['모든 도시 과학', ''], cityCul: ['모든 도시 문화', ''],
+    growthPct: ['도시 성장 속도', '%'], settlerPct: ['개척자·일꾼 생산', '%'], milProdPct: ['군사 유닛 생산', '%'], bldProdPct: ['건물 생산', '%'],
+    atkPct: ['공격력', '%'], defPct: ['방어력', '%'], cityDefPct: ['도시 방어력', '%'], heal: ['유닛 회복', ''], upkeepFree: ['무료 유지 유닛', ''],
+    buyCut: ['구매 비용 할인', '%'], marketCut: ['시장 거래 이득', '%'], tradeOp: ['다른 문명의 태도', ''], trustRegen: ['신뢰 회복', ''],
+    vetPct: ['정예 유닛 확률', '%'], improveSpeed: ['시설 건설 단축(턴)', ''], stockCap: ['도시당 채굴 시설', ''],
+  };
+  const GOVS = {
+    tribal:     { name: '부족 연맹', bloc: 'old',  mods: { upkeepFree: 1 }, desc: '시작 체제. 특별한 장단점이 없습니다' },
+    monarchy:   { name: '군주정',   bloc: 'old',  tech: 'code_of_laws', mods: { capProd: 2, capGold: 3, cityDefPct: 15 }, desc: '강한 수도와 튼튼한 도시' },
+    republic:   { name: '공화정',   bloc: 'free', tech: 'philosophy', mods: { goldPct: 15, sciPct: 10, culPct: 5, upkeepFree: -1 }, desc: '번영과 학문, 대신 군대 유지비가 늘어남' },
+    theocracy:  { name: '신정',     bloc: 'old',  tech: 'theology', mods: { culPct: 30, defPct: 10, sciPct: -10 }, desc: '문화와 수비가 강하지만 과학이 느림' },
+    feudal:     { name: '봉건제',   bloc: 'old',  tech: 'feudalism', mods: { upkeepFree: 4, defPct: 10, cityFood: 1, goldPct: -10 }, desc: '많은 군대를 싸게 유지' },
+    democracy:  { name: '민주주의', bloc: 'free', tech: 'social_contract', mods: { goldPct: 20, sciPct: 15, growthPct: 10, tradeOp: 10, atkPct: -10, upkeepFree: -2 }, desc: '경제·과학·외교 강세, 전쟁에는 불리' },
+    autocracy:  { name: '전제정',   bloc: 'auto', tech: 'nationalism', mods: { atkPct: 15, milProdPct: 30, upkeepFree: 3, tradeOp: -10, goldPct: -10 }, desc: '강력한 군국주의, 외교 평판 하락' },
+    communism:  { name: '공산주의', bloc: 'red',  tech: 'ideology', mods: { prodPct: 20, cityProd: 1, goldPct: -15, marketCut: -10 }, desc: '압도적 생산력, 상업 약화' },
+  };
+  const POLICY_TREES = {
+    tradition: { name: '전통', icon: 'crown', desc: '수도 중심의 안정된 성장', policies: [
+      { id: 'aristocracy', name: '귀족정', mods: { capProd: 2, capCul: 1 } },
+      { id: 'heritage', name: '전통 계승', mods: { growthPct: 10 } },
+      { id: 'royal_grace', name: '군주의 은총', mods: { capFood: 3, capGold: 2 } },
+      { id: 'lords', name: '지방 영주', mods: { cityProd: 1 } },
+      { id: 'ceremony', name: '왕실 의례', mods: { culPct: 15, capSci: 3 } } ] },
+    liberty: { name: '자유', icon: 'flag', desc: '넓은 확장과 시민의 힘', policies: [
+      { id: 'self_rule', name: '시민 자치', mods: { cityCul: 1 } },
+      { id: 'pioneer', name: '개척 정신', mods: { settlerPct: 50 } },
+      { id: 'citizenry', name: '시민 의식', mods: { cityProd: 1 } },
+      { id: 'merit', name: '능력주의', mods: { cityGold: 1, upkeepFree: 2 } },
+      { id: 'representation', name: '대의 정치', mods: { growthPct: 15, culPct: 10 } } ] },
+    honor: { name: '명예', icon: 'swords', desc: '전사의 길과 군사력', policies: [
+      { id: 'discipline', name: '전사 규율', mods: { atkPct: 10 } },
+      { id: 'mil_tradition', name: '군사 전통', mods: { milProdPct: 25 } },
+      { id: 'defense', name: '방어 전술', mods: { defPct: 15, cityDefPct: 20 } },
+      { id: 'warrior_caste', name: '전사 계급', mods: { upkeepFree: 3, heal: 10 } },
+      { id: 'conquest', name: '정복 정신', mods: { atkPct: 10, vetPct: 25 } } ] },
+    piety: { name: '신앙', icon: 'temple', tech: 'mysticism', desc: '종교와 문화, 평화로운 관계', policies: [
+      { id: 'org_religion', name: '조직 종교', mods: { cityCul: 1, cityFood: 1 } },
+      { id: 'clergy', name: '성직자 계급', mods: { culPct: 20 } },
+      { id: 'tolerance', name: '관용', mods: { tradeOp: 10, trustRegen: 0.5 } },
+      { id: 'reformation', name: '종교 개혁', mods: { cityGold: 2 } },
+      { id: 'divine', name: '신의 가호', mods: { defPct: 10, heal: 10 } } ] },
+    commerce: { name: '상업', icon: 'coin', tech: 'currency', desc: '교역과 부의 축적', policies: [
+      { id: 'free_market', name: '자유 시장', mods: { goldPct: 15 } },
+      { id: 'guilds', name: '상인 길드', mods: { marketCut: 15 } },
+      { id: 'trade_routes', name: '교역로', mods: { tradeOp: 10, cityGold: 1 } },
+      { id: 'banking_sys', name: '금융 제도', mods: { buyCut: 20 } },
+      { id: 'mercantilism', name: '중상주의', mods: { goldPct: 15, stockCap: 1 } } ] },
+    rationalism: { name: '합리주의', icon: 'flask', tech: 'education', desc: '과학과 이성', policies: [
+      { id: 'scholarship', name: '학문 장려', mods: { sciPct: 15 } },
+      { id: 'secularism', name: '세속주의', mods: { citySci: 2 } },
+      { id: 'empiricism', name: '실험 정신', mods: { sciPct: 10, bldProdPct: 15 } },
+      { id: 'enlightenment', name: '계몽 사상', mods: { culPct: 15, trustRegen: 0.5 } },
+      { id: 'sci_revolution', name: '과학 혁명', mods: { sciPct: 20 } } ] },
+    industrialism: { name: '산업주의', icon: 'factory', tech: 'industry', desc: '대량 생산과 기계의 시대', policies: [
+      { id: 'mechanization', name: '기계화', mods: { prodPct: 15 } },
+      { id: 'unions', name: '노동 조합', mods: { cityProd: 2 } },
+      { id: 'railways', name: '철도 국가', mods: { improveSpeed: 1, stockCap: 1 } },
+      { id: 'mass_prod', name: '대량 생산', mods: { milProdPct: 25, bldProdPct: 15 } },
+      { id: 'capital', name: '자본 축적', mods: { goldPct: 20 } } ] },
+  };
+  const POLICY = {};
+  for (const [tk, t] of Object.entries(POLICY_TREES)) t.policies.forEach((p, i) => { POLICY[p.id] = Object.assign({ tree: tk, idx: i }, p); });
+  function policyCost(n, cities, speed) { return Math.max(5, Math.round((20 + 12 * n + 1.6 * n * n) * speed * (1 + 0.08 * Math.max(0, cities - 1)))); }
+  // 기술 보너스 + 정부 + 사상 효과 합산
+  function sumMods(techs, gov, policies) {
+    const m = {};
+    const add = o => { for (const k in o || {}) m[k] = (m[k] || 0) + o[k]; };
+    for (const k in techs) if (TECHS[k] && TECHS[k].bonus) add(TECHS[k].bonus);
+    if (GOVS[gov]) add(GOVS[gov].mods);
+    for (const id of policies || []) if (POLICY[id]) add(POLICY[id].mods);
+    return m;
+  }
+  function modText(mods) { return Object.entries(mods || {}).map(([k, v]) => { const t = MOD_TEXT[k]; if (!t) return ''; return `${t[0]} ${v > 0 ? '+' : ''}${v}${t[1]}`; }).filter(Boolean).join(', '); }
 
   const PROCESSES = {
     wealth:   { name: '부 축적',   desc: '생산력 절반을 금으로' },
@@ -210,7 +331,8 @@
     return true;
   }
 
-  const R = { TERRAIN, STOCK, RES, IMPS, IMP_BY_CODE, UNITS, EQUIP, SLOTS, TECHS, BUILDINGS, PROCESSES, TACTICS, CIVS, SPEEDS, TREATY,
+  const R = { TERRAIN, STOCK, RES, IMPS, IMP_BY_CODE, UNITS, EQUIP, SLOTS, ERAS, TECHS, BUILDINGS, PROCESSES, TACTICS, CIVS, SPEEDS, TREATY,
+    MOD_TEXT, GOVS, POLICY_TREES, POLICY, policyCost, sumMods, modText,
     neighbors, dist, inRadius, reach, impFor, impTechOk, hasRes, availUnits, availBuildings, availEquip, availTechs, canEquip };
   if (typeof module !== 'undefined' && module.exports) module.exports = R;
   else root.RULES = R;

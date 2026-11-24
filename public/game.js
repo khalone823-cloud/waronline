@@ -4,6 +4,7 @@ const R = RULES, IC = ICONS, $ = s => document.querySelector(s);
 const ic = (n, s, c) => IC.svg(n, s || 16, c);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const STOCK_KEYS = Object.keys(R.STOCK);
+const CLIENT_VER = 3;
 const RES_COLOR = { wheat: '#f2d16b', fish: '#7dd3fc', horse: '#d9b38c', copper: '#e0894a', stone: '#c4beb8', gold: '#f0c35a', iron: '#a9c1d9', saltpeter: '#f3efe2', coal: '#9ca3af' };
 
 let ws = null, token = localStorage.getItem('civwar_token') || null, savedName = localStorage.getItem('civwar_myname') || '';
@@ -46,7 +47,10 @@ setInterval(() => { if (ws && ws.readyState === 1) ws.send('{"t":"ping"}'); }, 2
 function onMsg(m) {
   switch (m.t) {
     case 'joined': token = m.token; localStorage.setItem('civwar_token', token); localStorage.setItem('civwar_myname', m.name); savedName = m.name; me = m.pid; break;
-    case 'map': MAP = m; FOG = ''; OWNER = []; IMP = ''; S = null; deadShown = false; buildTerrain(); show('game'); wantRejoin = false; break;
+    case 'map':
+      if (m.ver !== CLIENT_VER) { if (!sessionStorage.getItem('civwar_reloaded')) { sessionStorage.setItem('civwar_reloaded', '1'); location.reload(); return; } toast('서버와 화면 파일 버전이 다릅니다. 모든 파일을 같은 버전으로 올려 주세요', true); }
+      else sessionStorage.removeItem('civwar_reloaded');
+      MAP = m; FOG = ''; OWNER = []; IMP = ''; S = null; deadShown = false; buildTerrain(); show('game'); wantRejoin = false; break;
     case 'state': onState(m); break;
     case 'log': if (m.text) addFeed(m.text, m.turn); break;
     case 'fx': for (const it of m.items) fxList.push({ i: it.pos, txt: it.txt || (it.dmg ? '-' + it.dmg : ''), t0: performance.now(), good: !!it.txt }); dirty = true; break;
@@ -515,6 +519,7 @@ function onState(m) {
   renderHud(); renderFeed();
   if ($('#mTech').classList.contains('on')) renderTech();
   if ($('#mDip').classList.contains('on')) renderDip();
+  if ($('#mIdeo').classList.contains('on')) renderIdeo();
   if ($('#mMarket').classList.contains('on')) renderMarket();
   if ($('#mRank').classList.contains('on')) renderRank();
   if (!S.my.alive && !deadShown) { deadShown = true; $('#mDead').classList.add('on'); }
@@ -525,7 +530,8 @@ function onState(m) {
 // ───────── 상단 바 ─────────
 function renderNav() {
   const inc = S ? (S.props || []).filter(p => p.to === me).length : 0;
-  const nav = [['bTech', 'tech', '기술'], ['bDip', 'handshake', '외교', inc], ['bMarket', 'scale', '시장'], ['bRank', 'crown', '순위'], ['bChat', 'chat', '채팅', chatUnread], ['bMenu', 'menu', '']];
+  const canPol = S && S.my.alive && !S.my.anarchy && S.my.culture >= S.my.pcost && Object.values(R.POLICY_TREES).some(t => (!t.tech || S.my.techs.includes(t.tech)) && t.policies.some(x => !S.my.policies.includes(x.id))) ? '!' : 0;
+  const nav = [['bTech', 'tech', '기술'], ['bIdeo', 'ideology', '사상', canPol], ['bDip', 'handshake', '외교', inc], ['bMarket', 'scale', '시장'], ['bRank', 'crown', '순위'], ['bChat', 'chat', '채팅', chatUnread], ['bMenu', 'menu', '']];
   for (const [id, icon, label, badge] of nav) $('#' + id).innerHTML = `${ic(icon, 18)}${label ? `<span class="lbl">${label}</span>` : ''}${badge ? `<span class="badge">${badge}</span>` : ''}`;
   $('#bStock').innerHTML = `${ic('box', 18)}`;
   $('#bStock').style.display = innerWidth < 760 ? '' : 'none';
@@ -537,6 +543,7 @@ function renderHud() {
   $('#hGold').innerHTML = `<span style="color:var(--gold)">${ic('coin', 15)}</span> ${my.gold} <small class="${my.gpt >= 0 ? 'pos' : 'neg'}">${my.gpt >= 0 ? '+' : ''}${my.gpt}</small>`;
   $('#hSci').innerHTML = `<span style="color:var(--blue)">${ic('flask', 15)}</span> <small class="pos">+${my.spt}</small>`;
   $('#hRes').innerHTML = my.res ? `${ic('tech', 15)} ${R.TECHS[my.res].name} <small>${Math.min(my.sci, my.rcost)}/${my.rcost}</small>` : `<span class="neg">${ic('tech', 15)} 연구 선택</span>`;
+  $('#hCul').innerHTML = my.anarchy ? `<span class="neg">${ic('gov', 15)} 무정부 ~${my.anarchy}턴</span>` : `<span style="color:#f0abfc">${ic('culture', 15)}</span> ${my.culture}/${my.pcost} <small class="pos">+${my.cpt}</small>`;
   const humansOn = S.players.filter(q => !q.removed && !q.ai && q.online);
   $('#hOnline').innerHTML = `${ic('users', 15)} ${humansOn.length} <small>준비 ${humansOn.filter(q => q.ready).length}</small>`;
   $('#stockbar').innerHTML = STOCK_KEYS.map(k => `<span class="chip" title="${R.STOCK[k].name}" data-mkt="1"><span style="color:${R.STOCK[k].color}">${ic(k, 14)}</span>${my.stock[k] || 0}${my.sgain[k] ? `<small>+${my.sgain[k]}</small>` : ''}</span>`).join('') +
@@ -700,7 +707,7 @@ function cityPanel() {
       <div class="mut" style="font-size:12px;margin-top:8px">${isWar(c.o) ? '부대로 공격해 체력을 0으로 만들면 근접 유닛이 점령합니다' : '공격하려면 [외교]에서 선전포고가 필요합니다'}</div></div>`;
   }
   const y = c.y, surplus = y.food - y.upkeep;
-  h += `<div class="pb" style="padding-bottom:4px"><div class="kv"><div style="color:#bef264">${ic('food', 14)}<b>${surplus >= 0 ? '+' : ''}${surplus}</b></div><div style="color:#fdba74">${ic('prod', 14)}<b>${y.prod}</b></div><div style="color:var(--gold)">${ic('coin', 14)}<b>${y.gold}</b></div><div style="color:var(--blue)">${ic('flask', 14)}<b>${y.sci}</b></div></div>
+  h += `<div class="pb" style="padding-bottom:4px"><div class="kv"><div style="color:#bef264">${ic('food', 14)}<b>${surplus >= 0 ? '+' : ''}${surplus}</b></div><div style="color:#fdba74">${ic('prod', 14)}<b>${y.prod}</b></div><div style="color:var(--gold)">${ic('coin', 14)}<b>${y.gold}</b></div><div style="color:var(--blue)">${ic('flask', 14)}<b>${y.sci}</b></div><div style="color:#f0abfc">${ic('culture', 14)}<b>${y.cul}</b></div></div>
     <div class="row mut" style="font-size:12px;margin-top:8px"><span>성장 ${c.food}/${c.need} · ${surplus <= 0 ? '<span class="neg">정체</span>' : Math.ceil((c.need - c.food) / surplus) + '턴'}</span><div class="sp"></div><span>${ic('shield', 12)} ${c.str} · ${ic('heart', 12)} ${c.hp}/${c.mhp}</span></div>${bar(c.food, c.need, '#86efac')}`;
   if (c.q) {
     const d = c.q.kind === 'unit' ? R.UNITS[c.q.type] : c.q.kind === 'building' ? R.BUILDINGS[c.q.type] : c.q.kind === 'equip' ? R.EQUIP[c.q.type] : R.PROCESSES[c.q.type];
@@ -784,28 +791,82 @@ function renderTech() {
   const maxD = Math.max(...Object.values(depth)), avail = new Set(R.availTechs(techs));
   let h = '';
   for (let d = 0; d <= maxD; d++) {
-    h += '<div class="tcol">';
-    for (const k of Object.keys(R.TECHS).filter(k => depth[k] === d)) {
+    const colT = Object.keys(R.TECHS).filter(k => depth[k] === d);
+    const eras = [...new Set(colT.map(k => R.ERAS[R.TECHS[k].era]))];
+    h += `<div class="tcol"><div class="tcolh">${eras.join(' · ')}</div>`;
+    for (const k of colT) {
       const T = R.TECHS[k];
       const cls = techs[k] ? 'known' : S.my.res === k ? 'res' : avail.has(k) ? 'avail' : 'locked';
       const ul = [...Object.keys(R.UNITS).filter(u => R.UNITS[u].tech === k).map(u => `<span class="chip">${ic(u, 12)}${R.UNITS[u].name}</span>`),
         ...Object.keys(R.BUILDINGS).filter(b => R.BUILDINGS[b].tech === k).map(b => `<span class="chip">${ic(b, 12)}${R.BUILDINGS[b].name}</span>`),
-        ...Object.keys(R.EQUIP).filter(b => R.EQUIP[b].tech === k).map(b => `<span class="chip">${ic(b, 12)}${R.EQUIP[b].name}</span>`)];
+        ...Object.keys(R.EQUIP).filter(b => R.EQUIP[b].tech === k).map(b => `<span class="chip">${ic(b, 12)}${R.EQUIP[b].name}</span>`),
+        ...Object.keys(R.GOVS).filter(g => R.GOVS[g].tech === k).map(g => `<span class="chip" style="color:#fcd34d">${ic('gov', 12)}${R.GOVS[g].name}</span>`),
+        ...Object.keys(R.POLICY_TREES).filter(g => R.POLICY_TREES[g].tech === k).map(g => `<span class="chip" style="color:#f0abfc">${ic(R.POLICY_TREES[g].icon, 12)}${R.POLICY_TREES[g].name} 사상</span>`)];
       const c = S.my.tcosts[k] || Math.round(T.cost * S.speed * 1.9);
       const turns = S.my.spt > 0 ? Math.max(1, Math.ceil((c - (S.my.res === k ? S.my.sci : 0)) / S.my.spt)) : '∞';
-      h += `<div class="tc ${cls}" data-tech="${k}"><b>${techs[k] ? ic('check', 14, 'pos') : ''}${T.name}</b>
+      h += `<div class="tc ${cls}" data-tech="${k}"><b>${techs[k] ? ic('check', 14, 'pos') : ''}${T.name} <span class="era">${R.ERAS[T.era]}</span></b>
         ${techs[k] ? '' : `<div class="mut">${ic('flask', 12)} ${c}${cls !== 'locked' ? ` · ${turns}턴` : ''}</div>`}
         ${!techs[k] && T.res ? `<div style="margin-top:4px">${paid.has(k) ? '<span class="chip">자원 투입됨</span>' : resChips(T.res)}</div>` : ''}
-        ${T.desc ? `<div class="mut" style="font-size:11px;margin-top:3px">${T.desc}</div>` : ''}
+        ${T.desc ? `<div class="mut" style="font-size:11px;margin-top:3px">${T.desc}</div>` : ''}${T.bonus ? `<div class="pos" style="font-size:11px;margin-top:3px">${R.modText(T.bonus)}</div>` : ''}
         ${T.req.length ? `<div class="dim" style="font-size:11px;margin-top:3px">선행: ${T.req.map(r => R.TECHS[r].name).join(', ')}</div>` : ''}
         ${ul.length ? `<div class="ul">${ul.join('')}</div>` : ''}</div>`;
     }
     h += '</div>';
   }
   $('#techTree').innerHTML = h;
-  $('#techInfo').innerHTML = `턴당 과학 <b class="pos">+${S.my.spt}</b> · 모아둔 과학 ${S.my.sci} · ${S.my.res ? `연구 중: <b>${R.TECHS[S.my.res].name}</b>` : '<span class="neg">연구할 기술을 고르세요</span>'} · 일부 기술은 시작할 때 자원이 필요합니다`;
+  $('#techInfo').innerHTML = `연구한 기술 ${S.my.techs.length}/${Object.keys(R.TECHS).length} · 턴당 과학 <b class="pos">+${S.my.spt}</b> · 모아둔 과학 ${S.my.sci} · ${S.my.res ? `연구 중: <b>${R.TECHS[S.my.res].name}</b>` : '<span class="neg">연구할 기술을 고르세요</span>'} · 일부 기술은 시작할 때 자원이 필요합니다`;
 }
 $('#techTree').onclick = e => { const t = e.target.closest('.tc.avail,.tc.res'); if (!t) return; act('research', { tech: t.dataset.tech }); };
+
+// ───────── 사상·정부 ─────────
+let ideoTab = 'policy';
+function openIdeo(tab) { if (tab) ideoTab = tab; renderIdeo(); $('#mIdeo').classList.add('on'); }
+function renderIdeo() {
+  const my = S.my, T = techsObj();
+  $('#ideoTitle').innerHTML = `${ic('ideology', 18)} 사상과 정부 <span class="mut" style="font-size:12px;font-weight:400">문화 ${my.culture} (+${my.cpt}/턴) · 다음 사상 ${my.pcost}</span>`;
+  $('#ideoTabs').innerHTML = [['policy', '사상 정책'], ['gov', '정부 체제'], ['sum', '효과 합계']].map(([k, n]) => `<button class="${ideoTab === k ? 'on' : ''}" data-itab="${k}">${n}</button>`).join('');
+  let h = '';
+  if (ideoTab === 'policy') {
+    h += `<div class="mut" style="font-size:12px;margin-bottom:10px">문화를 모아 사상을 채택합니다. 계열마다 위에서부터 차례대로 채택하며, 채택할수록 다음 비용이 오릅니다. ${my.anarchy ? '<span class="neg">무정부 상태에서는 채택할 수 없습니다.</span>' : ''}</div><div class="ptrees">`;
+    for (const [tk, t] of Object.entries(R.POLICY_TREES)) {
+      const locked = t.tech && !T[t.tech];
+      const got = t.policies.filter(x => my.policies.includes(x.id)).length;
+      h += `<div class="ptree ${locked ? 'locked' : ''}"><h4>${ic(t.icon, 17)} ${t.name} <span class="mut" style="font-size:12px;font-weight:400">${got}/${t.policies.length}</span></h4><div class="mut" style="font-size:12px">${t.desc}${locked ? ` · ${ic('lock', 11)} ${R.TECHS[t.tech].name} 필요` : ''}</div>`;
+      t.policies.forEach((x, i) => {
+        const has = my.policies.includes(x.id), isNext = !has && !locked && (i === 0 || my.policies.includes(t.policies[i - 1].id));
+        const afford = isNext && my.culture >= my.pcost && !my.anarchy;
+        h += `<button class="pol ${has ? 'got' : isNext ? 'next' : ''}" ${isNext ? `data-pol="${x.id}"` : 'disabled'} style="${isNext && !afford ? 'opacity:.75' : ''}">${has ? ic('check', 15, 'pos') : isNext ? ic('plus', 15, 'goldc') : ic('lock', 15, 'dim')}<span><span class="n">${x.name}</span><small>${R.modText(x.mods)}</small></span></button>`;
+      });
+      h += '</div>';
+    }
+    h += '</div>';
+  } else if (ideoTab === 'gov') {
+    h += `<div class="mut" style="font-size:12px;margin-bottom:10px">정부를 바꾸면 무정부 기간(1~2턴) 동안 금·과학이 크게 줄고 문화가 멈춥니다. 바꾼 뒤 10턴 동안은 다시 바꿀 수 없어요. 같은 계열(자유·전제·공산) 정부끼리는 사이가 좋아지고, 다른 계열과는 나빠집니다.</div><div class="govs">`;
+    const bloc = { old: '전통', free: '자유 진영', auto: '전제 진영', red: '공산 진영' };
+    for (const [gk, g] of Object.entries(R.GOVS)) {
+      const cur = my.gov === gk, locked = g.tech && !T[g.tech];
+      const wait = my.govTurn != null && S.turn - my.govTurn < 10;
+      h += `<div class="govc ${cur ? 'cur' : ''} ${locked ? 'locked' : ''}"><b style="display:flex;align-items:center;gap:6px">${ic('gov', 16)} ${g.name} <span class="era">${bloc[g.bloc]}</span></b><small>${g.desc}</small><div class="pos" style="font-size:12px">${R.modText(g.mods)}</div>
+        ${cur ? `<span class="tag" style="align-self:flex-start;color:var(--gold)">현재 체제${my.anarchy ? ' (전환 중)' : ''}</span>` : locked ? `<span class="dim" style="font-size:12px">${ic('lock', 12)} ${R.TECHS[g.tech].name} 필요</span>` : `<button class="sm pri" data-gov="${gk}" ${my.anarchy || wait ? 'disabled' : ''}>${wait ? `${my.govTurn + 10 - S.turn}턴 후 변경 가능` : '이 체제로 변경'}</button>`}</div>`;
+    }
+    h += '</div>';
+  } else {
+    const mods = my.mods || {};
+    const rows = Object.entries(mods).filter(([, v]) => v);
+    h += `<div class="mut" style="font-size:12px;margin-bottom:8px">기술 보너스 + 정부 체제 + 채택한 사상 효과를 모두 더한 값입니다.</div>`;
+    h += rows.length ? `<table class="mtable">${rows.map(([k, v]) => `<tr><td>${R.MOD_TEXT[k] ? R.MOD_TEXT[k][0] : k}</td><td class="n ${v > 0 ? 'pos' : 'neg'}">${v > 0 ? '+' : ''}${Math.round(v * 10) / 10}${R.MOD_TEXT[k] ? R.MOD_TEXT[k][1] : ''}</td></tr>`).join('')}</table>` : '<div class="mut">아직 적용된 효과가 없습니다</div>';
+    h += `<div class="sec">채택한 사상 (${my.policies.length})</div><div class="row" style="gap:5px">${my.policies.map(id => `<span class="chip">${ic(R.POLICY_TREES[R.POLICY[id].tree].icon, 12)} ${R.POLICY[id].name}</span>`).join('') || '<span class="mut">없음</span>'}</div>`;
+  }
+  $('#ideoBody').innerHTML = h;
+}
+$('#ideoTabs').onclick = e => { const b = e.target.closest('[data-itab]'); if (b) { ideoTab = b.dataset.itab; renderIdeo(); } };
+$('#ideoBody').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.pol) act('policy', { id: b.dataset.pol });
+  if (b.dataset.gov) { if (b.dataset.sure) act('gov', { id: b.dataset.gov }); else { b.dataset.sure = 1; b.textContent = '무정부 기간을 감수하고 변경'; } }
+};
+$('#bIdeo').onclick = () => openIdeo();
+$('#hCul').onclick = () => openIdeo();
 
 // ───────── 외교 ─────────
 function openDip(tab) { if (tab) dipTab = tab; renderDip(); $('#mDip').classList.add('on'); }
@@ -827,7 +888,7 @@ function renderDip() {
         : `<button class="sm danger" data-war="${q.id}">${ic('swords', 13)} 선전포고${q.pu || q.nap ? ' (배신)' : ''}</button>`;
       return `<div class="civrow"><span class="sw" style="background:${q.color}"></span><div style="min-width:0"><b>${esc(q.name)}</b> <span class="mut">${R.CIVS[q.civ].name}</span> ${q.ai ? '<span class="tag ai">AI</span>' : q.online ? '<span class="tag on">접속</span>' : '<span class="tag off">오프라인</span>'}
         <div class="tags">${relTags(q.id)}</div>
-        <div class="meta"><span>태도: <b style="color:${q.op >= 15 ? 'var(--green)' : q.op <= -15 ? 'var(--red)' : 'var(--text)'}">${q.op >= 50 ? '우호적' : q.op >= 15 ? '호의적' : q.op > -15 ? '중립' : q.op > -50 ? '경계' : '적대적'}</b> (${q.op})</span><span class="opbar" style="display:inline-block"><i style="left:${opPos}%"></i></span><span>군사력 ${milTxt}</span><span>신뢰 ${q.trust}</span><span>도시 ${q.cities} · 점수 ${q.score}</span>${treaty ? `<span>${treaty}</span>` : ''}</div></div>
+        <div class="meta">${q.gov ? `<span>${ic('gov', 12)} ${R.GOVS[q.gov].name}</span>` : ''}<span>태도: <b style="color:${q.op >= 15 ? 'var(--green)' : q.op <= -15 ? 'var(--red)' : 'var(--text)'}">${q.op >= 50 ? '우호적' : q.op >= 15 ? '호의적' : q.op > -15 ? '중립' : q.op > -50 ? '경계' : '적대적'}</b> (${q.op})</span><span class="opbar" style="display:inline-block"><i style="left:${opPos}%"></i></span><span>군사력 ${milTxt}</span><span>신뢰 ${q.trust}</span><span>도시 ${q.cities} · 점수 ${q.score}</span>${treaty ? `<span>${treaty}</span>` : ''}</div></div>
         <div class="btns"><button class="sm pri" data-deal="${q.id}">${ic('swap', 13)} ${q.d === 'war' ? '평화 협상' : '거래 제안'}</button>${warBtn}</div></div>`;
     }).join('') || '<div class="mut">아직 만난 문명이 없습니다. 정찰병으로 세계를 탐험해 보세요.</div>';
   } else if (dipTab === 'props') {
@@ -1083,6 +1144,7 @@ document.addEventListener('keydown', e => {
   else if (k === 'escape') { select(null); document.querySelectorAll('.modal.on').forEach(m => !['mDead', 'mBattle'].includes(m.id) && m.classList.remove('on')); }
   else if (k === 't') openTech();
   else if (k === 'd') openDip();
+  else if (k === 'p') openIdeo();
   else if (k === 'm') openMarket();
   else if (sel && sel.kind === 'stack') {
     if (k === 'f') { act('fortify', { units: pickedUnits().map(u => u.id) }); autoNext = true; }
