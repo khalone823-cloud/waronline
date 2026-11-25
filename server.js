@@ -178,7 +178,7 @@ class World {
       const map = genMap(this.W, this.H, this.seed);
       this.terr = map.terr; this.res = map.res; this.imp = new Array(this.N).fill('');
       this.nextId = 1; this.turn = 1; this.players = []; this.created = Date.now();
-      this.rels = {}; this.deals = []; this.props = [];
+      this.rels = {}; this.deals = []; this.props = []; this.corps = {}; this.history = [];
       this.market = { stock: Object.fromEntries(STOCK_KEYS.map(k => [k, MARKET_TARGET])) };
     }
     this.claim = new Int32Array(this.N).fill(-1);
@@ -192,8 +192,8 @@ class World {
   // ── 저장/불러오기 ──
   serialize() {
     return JSON.stringify({
-      v: 3, W: this.W, H: this.H, seed: this.seed, terr: this.terr, res: this.res, imp: this.imp, turn: this.turn, nextId: this.nextId, created: this.created,
-      rels: this.rels, deals: this.deals, props: this.props, market: this.market,
+      v: 4, W: this.W, H: this.H, seed: this.seed, terr: this.terr, res: this.res, imp: this.imp, turn: this.turn, nextId: this.nextId, created: this.created,
+      rels: this.rels, deals: this.deals, props: this.props, market: this.market, corps: this.corps, history: this.history,
       players: this.players.map(p => {
         const o = {}; for (const k of Object.keys(p)) if (!k.startsWith('_') && !['ws', 'visible', 'baseVis', 'explored', 'sentFog', 'sentOwner', 'sentImp'].includes(k)) o[k] = p[k];
         o.explored = Buffer.from(p.explored || new Uint8Array(this.N)).toString('base64'); return o;
@@ -204,7 +204,7 @@ class World {
   load(s) {
     this.W = s.W; this.H = s.H; this.N = s.W * s.H; this.seed = s.seed; this.terr = s.terr; this.res = s.res; this.imp = s.imp;
     this.turn = s.turn; this.nextId = s.nextId; this.created = s.created || Date.now();
-    this.rels = s.rels || {}; this.deals = s.deals || []; this.props = s.props || []; this.market = s.market;
+    this.rels = s.rels || {}; this.deals = s.deals || []; this.props = s.props || []; this.market = s.market; this.corps = s.corps || {}; this.history = s.history || [];
     this.players = s.players.map(p => Object.assign(p, { explored: new Uint8Array(Buffer.from(p.explored, 'base64')), visible: new Uint8Array(this.N), baseVis: new Uint8Array(this.N), ws: null, ready: false }));
     for (const u of s.units) this.units.set(u.id, u);
     for (const c of s.cities) { this.cities.set(c.id, c); this.cityAt.set(c.pos, c); }
@@ -224,8 +224,13 @@ class World {
   maxMoves(u) { return R.UNITS[u.type].moves + (u.eq && u.eq.mount ? R.EQUIP[u.eq.mount].mv : 0); }
   M(p) {
     if (!p || !p.techs) return {};
-    const key = Object.keys(p.techs).length + '|' + (p.policies || []).length + '|' + p.gov;
-    if (p._mk !== key) { p._mk = key; p._M = R.sumMods(p.techs, p.gov, p.policies); }
+    const key = Object.keys(p.techs).length + '|' + (p.policies || []).length + '|' + p.gov + '|' + (p.launched ? 1 : 0) + '|' + (p.space && p.space.satellite ? 1 : 0);
+    if (p._mk !== key) {
+      p._mk = key; p._M = R.sumMods(p.techs, p.gov, p.policies);
+      const add = o => { for (const k in o) p._M[k] = (p._M[k] || 0) + o[k]; };
+      if (p.launched) add(R.SPACE_BONUS);
+      if (p.space && p.space.satellite) add({ sciPct: 10 });
+    }
     return p._M;
   }
   anarchy(p) { return p && p.anarchyUntil > this.turn; }
@@ -281,7 +286,7 @@ class World {
   }
 
   addUnit(owner, type, pos, vet) {
-    const u = { id: this.nextId++, owner, type, pos, hp: 100, moves: R.UNITS[type].moves, fort: false, attacked: false, acted: false, vet: !!vet, eq: {} };
+    const u = { id: this.nextId++, owner, type, pos, hp: R.HPMAX, moves: R.UNITS[type].moves, fort: false, attacked: false, acted: false, vet: !!vet, eq: {} };
     this.units.set(u.id, u); return u;
   }
   killUnit(u) { this.units.delete(u.id); }
@@ -335,6 +340,7 @@ class World {
       stock, armory: {}, sgain: emptyStock(),
       explored: new Uint8Array(this.N), visible: new Uint8Array(this.N), baseVis: new Uint8Array(this.N), alive: true, removed: false,
       nameIdx: 0, gpt: 0, spt: 0, score: 0, log: [], met: {}, mods: {}, trust: p.trust == null ? 60 : Math.max(40, p.trust),
+      stab: 70, stabT: 70, shock: 0, lastEvent: this.turn, space: { satellite: 0, booster: 0, habitat: 0, engine: 0 }, launched: 0,
       culture: 0, cpt: 0, policies: [], gov: 'tribal', govTurn: -99, anarchyUntil: 0, aiTrees: Object.keys(R.POLICY_TREES).sort(() => this.rnd() - 0.5), aiGovs: Object.keys(R.GOVS).filter(g => g !== 'tribal').sort(() => this.rnd() - 0.5),
       joinTurn: this.turn, protectUntil: this.turn + CFG.PROTECT_TURNS, foundedCapital: false, ready: false, color: this.pickColor(),
     });
@@ -374,6 +380,191 @@ class World {
     this.deals = this.deals.filter(d => d.a !== p.id && d.b !== p.id);
     this.props = this.props.filter(d => d.from !== p.id && d.to !== p.id);
     this.refresh();
+  }
+
+  addHistory(text) { this.history.push({ turn: this.turn, text }); if (this.history.length > 80) this.history.shift(); this.msgAll(text); }
+
+  // ── 안정도 ──
+  techEra(p) { let e = 0; for (const k in p.techs) if (R.TECHS[k]) e = Math.max(e, R.TECHS[k].era); return e; }
+  computeStability(p) {
+    const parts = [], m = this.M(p), cs = this.citiesOf(p.id);
+    const add = (t, v) => { if (v) parts.push([t, Math.round(v)]); };
+    add('기본', 48);
+    add('정부·사상', Math.min(25, m.stability || 0));
+    const wars = this.alivePlayers().filter(q => q.id !== p.id && this.atWar(p.id, q.id)).length;
+    const bloc = R.GOVS[p.gov] && R.GOVS[p.gov].bloc;
+    add('전쟁 피로', -wars * (bloc === 'free' ? 8 : 4));
+    add('제국 규모', -Math.max(0, cs.length - 4) * 2 - Math.max(0, cs.length - 10));
+    add('점령지 불만', -1.5 * cs.filter(c => c.founder !== p.id).length);
+    const gap = this.techEra(p) - (R.GOVS[p.gov] ? R.GOVS[p.gov].era : 0) - 1;
+    add('낡은 정치 체제', gap > 0 ? -6 * gap : 0);
+    add('무정부 상태', this.anarchy(p) ? -15 : 0);
+    add('경제', (p.gpt < 0 ? -8 : 0) + (p.gold > 500 ? 3 : 0));
+    add('굶주림', -3 * cs.filter(c => c.starving).length);
+    add('문화', Math.min(10, Math.floor((p.cpt || 0) / 10)));
+    const myCorps = Object.values(this.corps).filter(c => c.owner === p.id && c.active).length;
+    add('기업 일자리', Math.min(6, myCorps * 2));
+    const occ = this._occ || this.occMap();
+    add('치안 공백', -Math.min(5, cs.filter(c => !(occ.get(c.pos) || []).some(u => u.owner === p.id && this.isMil(u))).length));
+    add('최근 사건', p.shock || 0);
+    p.stabParts = parts;
+    p.stabT = clamp(parts.reduce((a, b) => a + b[1], 0), 0, 100);
+    const cur = p.stab == null ? 70 : p.stab;
+    p.stab = cur + clamp(p.stabT - cur, -4, 4);
+  }
+  stabilityEvents(p) {
+    if (!p.alive || p.rebel && this.turn - p.joinTurn < 20) return;
+    if (this.protectedP(p.id)) return;
+    const cs = this.citiesOf(p.id);
+    if (cs.length < 2) return;
+    if (p.stab < 40 && !p.warned) { p.warned = true; this.msg(p.id, `경고: 국가 안정도가 ${Math.round(p.stab)}까지 떨어졌습니다. 폭동·혁명·쿠데타·분리 독립이 일어날 수 있습니다`); }
+    if (p.stab >= 45) p.warned = false;
+    if (this.turn - (p.lastEvent || 0) < 12) return;
+    const gap = this.techEra(p) - (R.GOVS[p.gov] ? R.GOVS[p.gov].era : 0) - 1;
+    if (gap > 0 && p.stab < 55 && p.stab >= 40 && !this.anarchy(p) && this.rnd() < 0.03 * gap) { p.lastEvent = this.turn; this.revolution(p); this.claimsDirty = true; return; }
+    if (p.stab >= 40) return;
+    if (this.rnd() > (40 - p.stab) * 0.012) return;
+    const w = { riot: 3, secession: p.stab < 25 && cs.length >= 3 ? 3 : 0, revolution: gap > 0 ? 4 : p.stab < 25 ? 1 : 0, coup: p.stab < 30 ? 2 : 0.5 };
+    let r = this.rnd() * Object.values(w).reduce((a, b) => a + b, 0), ev = 'riot';
+    for (const k in w) { r -= w[k]; if (r <= 0) { ev = k; break; } }
+    p.lastEvent = this.turn;
+    if (ev === 'riot') {
+      const c = cs[Math.floor(this.rnd() * cs.length)];
+      c.pop = Math.max(1, c.pop - 1); c.prod = 0; c.hp = Math.max(10, c.hp - 30);
+      this.msgMet([p.id], `[${p.name}]의 도시 ${c.name}에서 폭동이 일어났습니다!`);
+      p.shock = (p.shock || 0) + 3;
+    } else if (ev === 'secession') this.secede(p);
+    else if (ev === 'revolution') this.revolution(p);
+    else this.coup(p);
+    this.claimsDirty = true;
+  }
+  revolution(p) {
+    const pref = ['democracy', 'communism', 'republic', 'autocracy', 'monarchy'];
+    const avail = pref.filter(g => g !== p.gov && (!R.GOVS[g].tech || p.techs[R.GOVS[g].tech]));
+    const ng = avail.length ? (this.rnd() < 0.65 ? avail[0] : avail[Math.floor(this.rnd() * avail.length)]) : null;
+    if (!ng) return this.secede(p);
+    const old = R.GOVS[p.gov].name;
+    p.gov = ng; p.govTurn = this.turn; p.anarchyUntil = this.turn + 3; p.stab = 55; p.shock = 5;
+    p.gold = Math.floor(p.gold * 0.6);
+    this.addHistory(`혁명! [${p.name}]에서 민중 혁명이 일어나 ${old}이(가) 무너지고 ${R.GOVS[ng].name}이(가) 세워졌습니다`);
+  }
+  coup(p) {
+    const ng = ['autocracy', 'monarchy', 'feudal'].find(g => g !== p.gov && (!R.GOVS[g].tech || p.techs[R.GOVS[g].tech]));
+    p.gold = Math.floor(p.gold * 0.7);
+    const mils = this.unitsOf(p.id).filter(u => this.isMil(u) && !u.inBattle);
+    const purge = Math.floor(mils.length * 0.2);
+    for (let i = 0; i < purge; i++) this.killUnit(mils[Math.floor(this.rnd() * mils.length)]);
+    if (ng) { p.gov = ng; p.govTurn = this.turn; p.anarchyUntil = this.turn + 1; }
+    p.stab = 50; p.shock = 4;
+    this.addHistory(`쿠데타! [${p.name}]에서 군부가 정권을 장악했습니다${ng ? ` (${R.GOVS[ng].name} 수립)` : ''}. 숙청으로 군대 ${purge}개가 해산되었습니다`);
+  }
+  secede(p, forced) {
+    const cs = this.citiesOf(p.id).filter(c => !c.capital);
+    if (!cs.length) return;
+    const cap = this.citiesOf(p.id).find(c => c.capital);
+    const occ = this.occMap();
+    cs.sort((a, b) => {
+      const ga = (occ.get(a.pos) || []).filter(u => u.owner === p.id && this.isMil(u)).length, gb = (occ.get(b.pos) || []).filter(u => u.owner === p.id && this.isMil(u)).length;
+      return (cap ? R.dist(b.pos, cap.pos, this.W) - R.dist(a.pos, cap.pos, this.W) : 0) + (ga - gb) * 3;
+    });
+    const city = cs[0];
+    const q = this.createRebel(p, city);
+    this.addHistory(`반역! [${p.name}]의 도시 ${city.name}이(가) 반기를 들고 [${q.name}](으)로 독립을 선언했습니다`);
+    p.stab = Math.min(100, p.stab + 10); p.shock = (p.shock || 0) - 5;
+  }
+  createRebel(parent, city) {
+    const civ = parent.civ;
+    const q = { id: this.players.length, token: 'ai' + crypto.randomBytes(12).toString('hex'), name: `${city.name} ${['공화국', '해방전선', '자유국', '독립군'][Math.floor(this.rnd() * 4)]}`, civ, isAI: true, rebel: true, lastSeen: Date.now(), ws: null };
+    this.players.push(q);
+    const stock = emptyStock(); for (const k of STOCK_KEYS) stock[k] = Math.floor((parent.stock[k] || 0) * 0.25) + 3;
+    Object.assign(q, {
+      gold: 80, techs: Object.assign({}, parent.techs), paid: {}, researching: null, sciStore: 0, stock, armory: {}, sgain: emptyStock(),
+      explored: new Uint8Array(parent.explored), visible: new Uint8Array(this.N), baseVis: new Uint8Array(this.N), alive: true, removed: false,
+      nameIdx: 99, gpt: 0, spt: 0, score: 0, log: [], met: Object.assign({}, parent.met, { [parent.id]: 1 }), mods: {}, trust: 55,
+      stab: 65, stabT: 65, shock: 5, lastEvent: this.turn, space: { satellite: 0, booster: 0, habitat: 0, engine: 0 }, launched: 0,
+      culture: 0, cpt: 0, policies: [], gov: ['republic', 'monarchy', 'tribal'].find(g => !R.GOVS[g].tech || parent.techs[R.GOVS[g].tech]), govTurn: this.turn, anarchyUntil: 0,
+      aiTrees: Object.keys(R.POLICY_TREES).sort(() => this.rnd() - 0.5), aiGovs: Object.keys(R.GOVS).filter(g => g !== 'tribal').sort(() => this.rnd() - 0.5),
+      joinTurn: this.turn, protectUntil: 0, foundedCapital: true, ready: false, color: this.pickColor(),
+    });
+    parent.met[q.id] = 1;
+    for (const x of this.players) if (x.met && x.met[parent.id]) x.met[q.id] = 1;
+    for (const u of this.unitsAt(city.pos)) if (u.owner === parent.id) { u.owner = q.id; u.work = null; u.mining = false; }
+    city.owner = q.id; city.capital = true; city.queue = null; city.hp = this.cityMaxHp(city);
+    const best = R.availUnits(q.techs).filter(k => !R.UNITS[k].civ && !R.UNITS[k].rstr).sort((a, b) => R.UNITS[b].str - R.UNITS[a].str)[0] || 'warrior';
+    for (let i = 0; i < 2 + Math.floor(city.pop / 3); i++) this.addUnit(q.id, best, city.pos);
+    for (const c of Object.values(this.corps)) if (c.hq === city.id) c.owner = q.id;
+    const r = this.rel(parent.id, q.id); r.state = 'war'; r.warTurn = this.turn;
+    this.addMod(q, parent.id, 'war', -50);
+    this.computeClaims();
+    this.ensureCapital(parent.id);
+    return q;
+  }
+
+  // ── 기업 ──
+  corpTick() {
+    this.cityCorp = new Map();
+    for (const [id, c] of Object.entries(this.corps)) {
+      const o = this.players[c.owner];
+      c.branches = c.branches.filter(cid => this.cities.has(cid));
+      if (!o || !o.alive || !this.cities.has(c.hq)) { c.active = false; continue; }
+      const def = R.CORPS[id];
+      const ok = R.hasRes(o.stock, def.input);
+      if (ok) { for (const k in def.input) o.stock[k] -= def.input[k]; }
+      else if (c.active) this.msg(o.id, `${def.name}: 원료(${resText(def.input)})가 부족해 영업이 중단되었습니다`);
+      c.active = ok;
+      if (!ok) { c.income = 0; continue; }
+      let inc = 0;
+      for (const cid of c.branches) { const city = this.cities.get(cid); inc += city.owner === c.owner ? 2 : 4; }
+      c.income = Math.round(inc * (1 + (this.M(o).goldPct || 0) / 100));
+      o.gold += c.income;
+    }
+    this.rebuildCorpMap();
+  }
+  rebuildCorpMap() {
+    this.cityCorp = new Map();
+    for (const [id, c] of Object.entries(this.corps)) {
+      if (!c.active) continue;
+      const eff = R.CORPS[id].eff;
+      for (const cid of c.branches) {
+        const cur = this.cityCorp.get(cid) || {};
+        for (const k in eff) cur[k] = (cur[k] || 0) + eff[k];
+        this.cityCorp.set(cid, cur);
+      }
+    }
+  }
+  corpBranchCost(pid, city) { return city.owner === pid ? R.CORP_COST.branch : R.CORP_COST.foreign; }
+  canBranch(pid, corpId, city) {
+    const c = this.corps[corpId];
+    if (!c || c.owner !== pid) return '내 기업이 아닙니다';
+    if (!city) return '도시가 없습니다';
+    if (c.branches.includes(city.id)) return '이미 지사가 있습니다';
+    if (c.branches.length >= 14) return '지사가 너무 많습니다 (최대 14)';
+    if (city.owner !== pid) {
+      const p = this.players[pid];
+      if (!p.met[city.owner]) return '만나지 못한 나라입니다';
+      if (this.atWar(pid, city.owner)) return '전쟁 중인 나라에는 진출할 수 없습니다';
+      const r = this.rel(pid, city.owner);
+      const deal = this.deals.some(d => (d.a === pid && d.b === city.owner) || (d.b === pid && d.a === city.owner));
+      if (!r.alliance && !(r.openUntil > this.turn) && !deal) return '해외 진출에는 국경 개방·동맹·교역 협정 중 하나가 필요합니다';
+    }
+    return null;
+  }
+
+  // ── 우주 ──
+  canProject(p, c, type) {
+    const P = R.PROJECTS[type]; if (!P) return '잘못된 프로젝트';
+    if (!p.techs[P.tech]) return `[${R.TECHS[P.tech].name}] 기술이 필요합니다`;
+    if (!c.buildings.includes('launchpad')) return '발사대가 있는 도시에서만 만들 수 있습니다';
+    if (p.launched) return '이미 우주선을 발사했습니다';
+    const queued = this.citiesOf(p.id).filter(x => x !== c && x.queue && x.queue.kind === 'project' && x.queue.type === type).length;
+    if ((p.space[type] || 0) + queued >= P.max) return '이미 충분히 만들었습니다';
+    return null;
+  }
+  checkLaunch(p) {
+    if (p.launched) return;
+    for (const k in R.SPACE_NEED) if ((p.space[k] || 0) < R.SPACE_NEED[k]) return;
+    p.launched = this.turn;
+    this.addHistory(`우주 시대! [${p.name}]이(가) 우주선을 발사해 인류 최초로 별을 향해 떠났습니다! (영구 보너스: ${R.modText(R.SPACE_BONUS)})`);
   }
 
   // ── 영토·시야 ──
@@ -430,8 +621,8 @@ class World {
     s *= 1 + (this.M(p).cityDefPct || 0) / 100;
     return Math.round(s);
   }
-  cityMaxHp(c) { let h = 200; for (const b of c.buildings) h += R.BUILDINGS[b].hp || 0; return h; }
-  foodNeed(pop, p) { return Math.max(3, Math.round((14 + 8 * (pop - 1) + Math.pow(pop - 1, 1.6)) * this.speed * (1 - (p ? (this.M(p).growthPct || 0) : 0) / 100))); }
+  cityMaxHp(c) { let h = R.CITY_HP; for (const b of c.buildings) h += R.BUILDINGS[b].hp || 0; return h; }
+  foodNeed(pop, p) { return Math.max(2, Math.round((14 + 8 * (pop - 1) + Math.pow(pop - 1, 1.6)) * this.speed * 0.5 * (1 - (p ? (this.M(p).growthPct || 0) : 0) / 100))); }
   tileYield(i) {
     const t = R.TERRAIN[this.terr[i]], r = this.res[i] ? R.RES[this.res[i]] : null;
     const y = { food: t.food + (r ? r.food : 0), prod: t.prod + (r ? r.prod : 0), gold: t.gold + (r ? r.gold : 0) };
@@ -458,6 +649,8 @@ class World {
     prod += Math.floor(c.pop / 3);
     food += m.cityFood || 0; prod += m.cityProd || 0; gold += m.cityGold || 0; sci += m.citySci || 0;
     for (const b of c.buildings) { const B = R.BUILDINGS[b]; food += B.food || 0; prod += B.prod || 0; gold += B.gold || 0; sci += B.sci || 0; cul += B.cul || 0; }
+    const ce = this.cityCorp && this.cityCorp.get(c.id);
+    if (ce) { food += ce.food || 0; prod += ce.prod || 0; gold += ce.gold || 0; sci += ce.sci || 0; cul += ce.cul || 0; }
     if (c.capital) { gold += 3 + (m.capGold || 0); sci += 2 + (m.capSci || 0); prod += 1 + (m.capProd || 0); food += m.capFood || 0; cul += 2 + (m.capCul || 0); }
     const pct = (v, k) => Math.max(0, Math.round(v * (1 + (m[k] || 0) / 100)));
     food = pct(food, 'foodPct'); prod = pct(prod, 'prodPct'); gold = pct(gold, 'goldPct'); sci = pct(sci, 'sciPct'); cul = pct(cul, 'culPct');
@@ -470,9 +663,10 @@ class World {
     if (q.kind === 'unit') return R.UNITS[q.type];
     if (q.kind === 'building') return R.BUILDINGS[q.type];
     if (q.kind === 'equip') return R.EQUIP[q.type];
+    if (q.kind === 'project') return R.PROJECTS[q.type];
     return null;
   }
-  itemCost(q) { const d = this.itemDef(q); return d ? this.cost(d.cost) : 0; }
+  itemCost(q) { const d = this.itemDef(q); if (!d) return 0; return this.cost(d.cost * (q.kind === 'unit' ? 0.5 : 1)); }
   itemRes(q) { const d = this.itemDef(q); return d ? d.res || null : null; }
   buyPrice(c) { return c.queue && c.queue.kind !== 'process' ? Math.max(1, Math.round(((this.itemCost(c.queue) - c.prod) * 2.2 + 10) * (1 - (this.M(this.players[c.owner]).buyCut || 0) / 100))) : 0; }
   canFound(pid, pos) {
@@ -489,7 +683,7 @@ class World {
     while (p.nameIdx < civ.cities.length) { const n = civ.cities[p.nameIdx++]; if (!taken.has(n)) { name = n; break; } }
     if (!name) { let k = this.citiesOf(pid).length + 1; do { name = `${p.name}의 도시 ${k++}`; } while (taken.has(name)); }
     const first = !p.foundedCapital;
-    const c = { id: this.nextId++, owner: pid, founder: pid, name, pos, pop: 1, food: 0, prod: 0, hp: 200, buildings: [], queue: null,
+    const c = { id: this.nextId++, owner: pid, founder: pid, name, pos, pop: 1, food: 0, prod: 0, hp: R.CITY_HP, buildings: [], queue: null,
       capital: first, attackedTurn: 0, shotTurn: 0, founded: this.turn };
     if (first) p.foundedCapital = true;
     this.cities.set(c.id, c); this.cityAt.set(pos, c);
@@ -504,7 +698,13 @@ class World {
   }
 
   // ── 이동 ──
-  canStand(pid, i, occ) {
+  workerSlotOk(i, occ, self) {
+    if (!this.res[i] && !this.imp[i]) return true;
+    if (this.cityAt.has(i)) return true;
+    const us = occ.get(i) || [];
+    return us.filter(x => x !== self && R.UNITS[x.type].worker).length < 3;
+  }
+  canStand(pid, i, occ, self) {
     const c = this.cityAt.get(i); if (c && c.owner !== pid) return false;
     const us = occ.get(i); if (us && !us.every(x => this.friendly(pid, x.owner))) return false;
     return this.canEnterLand(pid, this.tileOwner(i));
@@ -512,7 +712,8 @@ class World {
   reachFor(u, occ) {
     occ = occ || this.occMap();
     const ok = i => this.canStand(u.owner, i, occ);
-    return R.reach(this.W, this.H, this.terr, u.pos, u.moves, ok, ok);
+    const end = R.UNITS[u.type].worker ? (i => ok(i) && this.workerSlotOk(i, occ, u)) : ok;
+    return R.reach(this.W, this.H, this.terr, u.pos, u.moves, ok, end);
   }
   // 근접 공격 가능 칸 (전투 시작)
   battleTargets(pid, from) {
@@ -565,7 +766,7 @@ class World {
   // ── 전투 ──
   eqAtk(u) { return u.eq && u.eq.weapon ? R.EQUIP[u.eq.weapon].atk : 0; }
   eqDef(u) { return u.eq && u.eq.armor ? R.EQUIP[u.eq.armor].def : 0; }
-  hpF(u) { return 0.5 + 0.5 * Math.max(0, u.hp) / 100; }
+  hpF(u) { return 0.5 + 0.5 * Math.max(0, u.hp) / R.HPMAX; }
   atkPow(u) { const U = R.UNITS[u.type]; return ((U.rstr || U.str) + this.eqAtk(u)) * (u.vet ? 1.15 : 1) * this.hpF(u) * (1 + (this.M(this.players[u.owner]).atkPct || 0) / 100); }
   defPow(u, onHome) {
     const U = R.UNITS[u.type];
@@ -613,7 +814,7 @@ class World {
     const D = b.dIds.map(id => this.units.get(id)).filter(u => u && u.hp > 0);
     const hits = [];
     if (tac === 'retreat') {
-      for (const d of D) { const t = A[Math.floor(this.rnd() * A.length)]; if (!t) break; const dmg = clamp(Math.round(10 * Math.pow(this.atkPow(d) / this.defPow(t), 1.1) * (0.8 + this.rnd() * 0.4)), 1, 40); t.hp -= dmg; hits.push({ s: 'd', f: d.id, t: t.id, d: dmg }); }
+      for (const d of D) { const t = A[Math.floor(this.rnd() * A.length)]; if (!t) break; const dmg = clamp(Math.round(10 * R.DMG * Math.pow(this.atkPow(d) / this.defPow(t), 1.1) * (0.8 + this.rnd() * 0.4)), 1, 40); t.hp -= dmg; hits.push({ s: 'd', f: d.id, t: t.id, d: dmg }); }
       b.last = { aTac: 'retreat', dTac: null, adv: null, hits };
       this.cleanupDead(b);
       return this.finishBattle(b, 'retreat');
@@ -636,7 +837,7 @@ class World {
       let mod = tacMod(myTac, U) * takenMod(foeTac) * (adv === side ? 1.3 : adv ? 0.8 : 1);
       if (!isCity && U.anti && R.UNITS[target.type].mounted) mod *= 1.5;
       if (isCity && U.siege) mod *= 2;
-      const dmg = clamp(Math.round(16 * Math.pow(aPow / Dp, 1.1) * (0.8 + this.rnd() * 0.4) * mod), 1, 70);
+      const dmg = clamp(Math.round(16 * R.DMG * Math.pow(aPow / Dp, 1.1) * (0.8 + this.rnd() * 0.4) * mod), 1, 80);
       hits.push({ s: side, f, t: isCity ? 'city' : target.id, d: dmg });
     };
     for (const u of A) strike('a', u.id, R.UNITS[u.type], this.atkPow(u), D, city, tac, dTac);
@@ -719,7 +920,7 @@ class World {
     this.touched.add(u.owner);
     if (city && city.owner !== u.owner && this.atWar(u.owner, city.owner)) {
       const A = this.atkPow(u) * (U.siege ? 2 : 1), D = this.cityStrength(city);
-      const dmg = clamp(Math.round(24 * Math.pow(A / D, 1.1) * (0.85 + this.rnd() * 0.3)), 1, 90);
+      const dmg = clamp(Math.round(24 * R.DMG * Math.pow(A / D, 1.1) * (0.85 + this.rnd() * 0.3)), 1, 90);
       city.hp = Math.max(1, city.hp - dmg); city.attackedTurn = this.turn; this.touched.add(city.owner);
       this.fx(target, [{ pos: target, dmg }]);
       this.msg(city.owner, `${city.name}이(가) [${this.nm(u.owner)}]의 ${U.name}에게 포격당했습니다 (-${dmg})`);
@@ -730,7 +931,7 @@ class World {
     const d = mil.length ? mil[Math.floor(this.rnd() * mil.length)] : foes[0];
     if (!d) return;
     this.touched.add(d.owner);
-    const dmg = this.isMil(d) ? clamp(Math.round(26 * Math.pow(this.atkPow(u) / this.defPow(d, true), 1.1) * (0.85 + this.rnd() * 0.3)), 1, 90) : 100;
+    const dmg = this.isMil(d) ? clamp(Math.round(26 * R.DMG * Math.pow(this.atkPow(u) / this.defPow(d, true), 1.1) * (0.85 + this.rnd() * 0.3)), 1, 90) : 999;
     d.hp -= dmg;
     this.fx(target, [{ pos: target, dmg }]);
     if (d.hp <= 0) { this.killUnit(d); this.msg(d.owner, `${R.UNITS[d.type].name}이(가) [${this.nm(u.owner)}]의 포격으로 전멸했습니다`); this.msg(u.owner, `포격으로 적 ${R.UNITS[d.type].name}을(를) 격파했습니다`); this.checkElimination(d.owner); }
@@ -741,7 +942,7 @@ class World {
     const d = foes.find(x => this.isMil(x)) || foes[0];
     if (!d) return;
     this.touched.add(d.owner);
-    const dmg = this.isMil(d) ? clamp(Math.round(24 * Math.pow(this.cityStrength(c) * 0.75 / this.defPow(d, true), 1.1) * (0.85 + this.rnd() * 0.3)), 1, 90) : 100;
+    const dmg = this.isMil(d) ? clamp(Math.round(24 * R.DMG * Math.pow(this.cityStrength(c) * 0.75 / this.defPow(d, true), 1.1) * (0.85 + this.rnd() * 0.3)), 1, 90) : 999;
     d.hp -= dmg; c.shotTurn = this.turn;
     this.fx(target, [{ pos: target, dmg }]);
     if (d.hp <= 0) { this.killUnit(d); this.msg(d.owner, `${R.UNITS[d.type].name}이(가) ${c.name}의 포격으로 전멸했습니다`); this.checkElimination(d.owner); }
@@ -768,9 +969,11 @@ class World {
       if (u.owner === attacker.owner) continue;
       if (this.isMil(u)) this.killUnit(u); else { u.owner = attacker.owner; u.work = null; }
     }
-    c.owner = attacker.owner; c.pop = Math.max(1, Math.ceil(c.pop / 2)); c.hp = 60; c.queue = null; c.prod = 0; c.food = 0;
+    c.owner = attacker.owner; c.pop = Math.max(1, Math.ceil(c.pop / 2)); c.hp = 40; c.queue = null; c.prod = 0; c.food = 0;
     c.buildings = c.buildings.filter(b => (b !== 'walls' && b !== 'castle') || this.rnd() < 0.5);
     const wasCap = c.capital; c.capital = false;
+    for (const [cid, corp] of Object.entries(this.corps)) if (corp.hq === c.id) { corp.owner = attacker.owner; this.msgMet([attacker.owner, oldOwner], `${R.CORPS[cid].name} 본사가 [${this.nm(attacker.owner)}]의 손에 넘어갔습니다`); }
+    if (this.players[oldOwner]) this.players[oldOwner].shock = (this.players[oldOwner].shock || 0) - (wasCap ? 20 : 10);
     this.msgMet([attacker.owner, oldOwner], `[${this.nm(attacker.owner)}]이(가) [${this.nm(oldOwner)}]의 도시 ${c.name}을(를) 점령했습니다!${wasCap ? ' (수도 함락)' : ''}`);
     this.claimsDirty = true;
     this.computeClaims();
@@ -981,7 +1184,9 @@ class World {
           if (u.pos !== from || u.moves <= 0) continue;
           const rr = this.reachFor(u, occ);
           if (!rr.has(m.to)) continue;
-          u.pos = m.to; u.moves = rr.get(m.to); u.fort = false; u.acted = true; u.skip = false; u.work = null; moved++;
+          const prev = occ.get(u.pos); if (prev) occ.set(u.pos, prev.filter(x => x !== u));
+          u.pos = m.to; u.moves = rr.get(m.to); u.fort = false; u.acted = true; u.skip = false; u.work = null; u.mining = false; moved++;
+          if (!occ.get(m.to)) occ.set(m.to, []); occ.get(m.to).push(u);
         }
         if (!moved) return '이동할 수 없는 곳입니다';
         near = [from, m.to];
@@ -1016,6 +1221,7 @@ class World {
         break;
       }
       case 'improve': {
+        if (U) U.mining = false;
         if (!U || !R.UNITS[U.type].worker) return '일꾼만 시설을 지을 수 있습니다';
         if (this.tileOwner(U.pos) !== pid) return '내 영토 안에서만 시설을 지을 수 있습니다';
         if (this.cityAt.has(U.pos)) return '도시 칸에는 지을 수 없습니다';
@@ -1023,7 +1229,7 @@ class World {
         if (!imp) return '이 칸에는 지을 시설이 없습니다';
         if (this.imp[U.pos] === R.IMPS[imp].code) return '이미 시설이 있습니다';
         if (!R.impTechOk(this.terr[U.pos], this.res[U.pos], p.techs)) return `기술이 필요합니다: ${R.TECHS[R.RES[this.res[U.pos]] ? R.RES[this.res[U.pos]].tech : 'mining'].name}`;
-        if (this.unitsAt(U.pos).some(x => x.id !== U.id && x.work)) return '다른 일꾼이 이미 작업 중입니다';
+        U.mining = false;
         U.work = { imp, left: Math.max(1, R.IMPS[imp].turns - (this.M(p).improveSpeed || 0)) }; U.moves = 0; U.acted = true;
         break;
       }
@@ -1088,7 +1294,8 @@ class World {
       case 'prod': {
         if (!C) return '도시 없음';
         const k = m.kind, t = m.type;
-        if (!['unit', 'building', 'process', 'equip'].includes(k)) return '잘못된 항목';
+        if (!['unit', 'building', 'process', 'equip', 'project'].includes(k)) return '잘못된 항목';
+        if (k === 'project') { const why = this.canProject(p, C, t); if (why) return why; }
         if (k === 'unit' && !R.availUnits(p.techs).includes(t)) return '생산할 수 없는 유닛';
         if (k === 'building' && !R.availBuildings(p.techs, C.buildings).includes(t)) return '지을 수 없는 건물';
         if (k === 'equip' && !R.availEquip(p.techs).includes(t)) return '제작할 수 없는 장비';
@@ -1133,6 +1340,7 @@ class World {
         const tree = R.POLICY_TREES[pol.tree];
         if (tree.tech && !p.techs[tree.tech]) return `[${R.TECHS[tree.tech].name}] 기술이 있어야 ${tree.name} 사상을 열 수 있습니다`;
         if (pol.idx > 0 && !p.policies.includes(tree.policies[pol.idx - 1].id)) return '같은 계열의 앞 단계 사상을 먼저 채택해야 합니다';
+        if (tree.ideo && p.policies.some(id => R.POLICY_TREES[R.POLICY[id].tree].ideo && R.POLICY[id].tree !== pol.tree)) return '근대 이념은 하나만 선택할 수 있습니다';
         if (this.anarchy(p)) return '무정부 상태에서는 사상을 채택할 수 없습니다';
         const cost = this.policyCost(p);
         if (p.culture < cost) return `문화가 부족합니다 (${cost} 필요)`;
@@ -1151,6 +1359,76 @@ class World {
         p.gov = m.id; p.govTurn = this.turn; p.anarchyUntil = this.turn + an;
         this.msgMet([pid], `[${p.name}]이(가) 정부 체제를 ${g.name}(으)로 바꿉니다 (무정부 ${an}턴)`);
         this.markAll();
+        break;
+      }
+      case 'mine': {
+        if (!U || !R.UNITS[U.type].worker) return '일꾼만 상주 채굴을 할 수 있습니다';
+        if (this.tileOwner(U.pos) !== pid) return '내 영토 안에서만 상주 채굴할 수 있습니다';
+        if (!this.imp[U.pos] || !this.mineOutput(p, U.pos)) return '자원을 캐는 시설(광산·목장·벌목장)이 있는 칸이어야 합니다';
+        U.mining = !U.mining; U.work = null; if (U.mining) { U.moves = 0; U.acted = true; }
+        break;
+      }
+      case 'festival': {
+        const cost = 30 + 15 * this.citiesOf(pid).length;
+        if (p.gold < cost) return `금이 부족합니다 (${cost} 필요)`;
+        if (this.turn - (p.festTurn || -99) < 8) return `축제는 8턴마다 열 수 있습니다 (${p.festTurn + 8 - this.turn}턴 남음)`;
+        p.gold -= cost; p.festTurn = this.turn; p.shock = (p.shock || 0) + 12;
+        this.computeStability(p);
+        this.msg(pid, `국가 축제를 열었습니다 (안정도 일시 상승, -${cost}금)`);
+        break;
+      }
+      case 'incite': {
+        const t = this.players[m.target];
+        if (!t || !t.alive || t.id === pid || !p.met[t.id]) return '대상이 없습니다';
+        if (this.allied(pid, t.id)) return '동맹국에는 할 수 없습니다';
+        const cost = 150;
+        if (p.gold < cost) return `금이 부족합니다 (${cost} 필요)`;
+        if (this.turn - (p.inciteTurn || -99) < 5) return '공작은 5턴마다 할 수 있습니다';
+        p.gold -= cost; p.inciteTurn = this.turn;
+        t.shock = (t.shock || 0) - 15;
+        if (this.rnd() < 0.4) {
+          this.addMod(t, pid, 'broken', -35);
+          p.trust = Math.max(0, (p.trust == null ? 60 : p.trust) - 10);
+          this.msg(t.id, `[${p.name}]이(가) 우리나라의 반정부 세력을 지원하다 발각되었습니다!`);
+          this.msg(pid, `[${t.name}] 반군 지원 공작이 발각되었습니다! 관계와 신뢰가 크게 나빠졌습니다`);
+        } else { this.msg(t.id, '누군가 우리나라의 반정부 세력을 몰래 지원하고 있습니다'); this.msg(pid, `[${t.name}] 반군 지원 공작에 성공했습니다 (상대 안정도 하락)`); }
+        this.touched.add(t.id);
+        break;
+      }
+      case 'corpFound': {
+        const def = R.CORPS[m.corp]; if (!def) return '잘못된 기업';
+        if (!C) return '도시를 고르세요';
+        if (!p.techs[def.tech]) return `[${R.TECHS[def.tech].name}] 기술이 필요합니다`;
+        if (this.corps[m.corp]) return `${def.name}은(는) 이미 [${this.nm(this.corps[m.corp].owner)}]이(가) 세웠습니다`;
+        if (p.gold < R.CORP_COST.found) return `금이 부족합니다 (${R.CORP_COST.found} 필요)`;
+        if (!R.hasRes(p.stock, def.found)) return `자원이 부족합니다: ${resText(def.found)}`;
+        p.gold -= R.CORP_COST.found; for (const k in def.found) p.stock[k] -= def.found[k];
+        this.corps[m.corp] = { owner: pid, hq: C.id, branches: [C.id], active: true, income: 0, founded: this.turn };
+        this.rebuildCorpMap();
+        this.addHistory(`[${p.name}]이(가) ${C.name}에 ${def.name} 본사를 세웠습니다`);
+        break;
+      }
+      case 'corpBranch': {
+        const city = this.cities.get(m.city);
+        const why = this.canBranch(pid, m.corp, city); if (why) return why;
+        const cost = this.corpBranchCost(pid, city);
+        if (p.gold < cost) return `금이 부족합니다 (${cost} 필요)`;
+        p.gold -= cost; this.corps[m.corp].branches.push(city.id); this.rebuildCorpMap();
+        if (city.owner !== pid) { this.msg(city.owner, `[${p.name}]의 ${R.CORPS[m.corp].name}이(가) ${city.name}에 지사를 열었습니다`); this.touched.add(city.owner); this.addMod(this.players[city.owner], pid, 'trade', 3); }
+        this.msg(pid, `${city.name}에 ${R.CORPS[m.corp].name} 지사를 열었습니다`);
+        break;
+      }
+      case 'nationalize': {
+        const c = this.corps[m.corp], city = this.cities.get(m.city);
+        if (!c || !city || city.owner !== pid || c.owner === pid || !c.branches.includes(city.id)) return '국유화할 수 없습니다';
+        if (c.hq === city.id) return '본사는 국유화할 수 없습니다';
+        c.branches = c.branches.filter(x => x !== city.id); this.rebuildCorpMap();
+        p.gold += 150;
+        const o = this.players[c.owner];
+        this.addMod(o, pid, 'broken', -30);
+        p.trust = Math.max(0, (p.trust == null ? 60 : p.trust) - 5);
+        this.msgTo([pid, c.owner], `[${p.name}]이(가) ${city.name}의 ${R.CORPS[m.corp].name} 지사를 국유화했습니다`);
+        this.touched.add(c.owner);
         break;
       }
       case 'market': { const e = this.trade(p, m.res, m.n, m.side === 'buy' ? 'buy' : 'sell'); if (e) return e; break; }
@@ -1205,6 +1483,14 @@ class World {
       this.msg(c.owner, `${c.name}: ${R.UNITS[q.type].name} 생산 완료`);
       c.prod -= cost;
       if (q.type === 'settler') { c.pop -= 1; c.queue = null; }
+    } else if (q.kind === 'project') {
+      if (this.canProject(p, c, q.type) && !(p.space[q.type] < R.PROJECTS[q.type].max)) { c.queue = null; return; }
+      for (const k in need || {}) p.stock[k] -= need[k];
+      p.space[q.type] = (p.space[q.type] || 0) + 1;
+      c.prod -= cost; c.queue = null;
+      this.msgMet([p.id], `[${p.name}]이(가) ${R.PROJECTS[q.type].name}을(를) 완성했습니다`);
+      if (q.type === 'satellite') { p.explored.fill(1); this.msg(p.id, '정찰 위성이 궤도에 올라 세계 지도 전체가 공개되었습니다'); }
+      this.checkLaunch(p);
     } else if (q.kind === 'equip') {
       for (const k in need || {}) p.stock[k] -= need[k];
       p.armory[q.type] = (p.armory[q.type] || 0) + 1;
@@ -1218,9 +1504,22 @@ class World {
       c.prod -= cost; c.queue = null;
     }
   }
-  // 도시마다 시설 몇 곳만 가동 (인구에 비례): 1 + ceil(인구/2)
+  // 도시마다 시설 몇 곳만 가동 (인구에 비례): 1 + ceil(인구/2). 상주 일꾼은 칸당 최대 3명이 추가 채굴
+  mineOutput(p, i) {
+    const imp = R.IMP_BY_CODE[this.imp[i]], r = this.res[i];
+    if (imp === 'lumber') return 'wood';
+    if ((imp === 'mine' || imp === 'pasture') && r && R.impTechOk(this.terr[i], r, p.techs)) return R.RES[r].stock || (R.RES[r].coin ? 'coin' : null);
+    if (imp === 'mine' && !r && this.terr[i] === 'hills') return 'stone';
+    return null;
+  }
   stockIncome() {
     for (const p of this.players) { p.sgain = emptyStock(); p.coinGain = 0; }
+    for (const u of this.units.values()) {
+      if (!u.mining) continue;
+      const p = this.players[u.owner]; if (!p || !p.alive || this.tileOwner(u.pos) !== u.owner) continue;
+      const out = this.mineOutput(p, u.pos);
+      if (out === 'coin') p.coinGain += 2; else if (out) p.sgain[out]++;
+    }
     for (const c of this.cities.values()) {
       const p = this.players[c.owner]; if (!p || !p.alive) continue;
       const outs = [];
@@ -1243,7 +1542,7 @@ class World {
     for (const c of this.citiesOf(p.id)) {
       const y = this.cityYields(c, occ);
       gpt += y.gold; spt += y.sci; cpt += y.cul;
-      c.food += y.food - y.upkeep;
+      c.food += y.food - y.upkeep; c.starving = y.food < y.upkeep;
       const need = this.foodNeed(c.pop, this.players[c.owner]);
       if (c.food >= need) { c.food -= need; c.pop++; this.msg(p.id, `${c.name}의 인구가 ${c.pop}(으)로 늘었습니다`); }
       else if (c.food < 0) { if (c.pop > 1) { c.pop--; this.msg(p.id, `${c.name}이(가) 굶주려 인구가 줄었습니다`); } c.food = 0; }
@@ -1251,10 +1550,11 @@ class World {
         let bonus = 0;
         if (c.queue.kind === 'unit') bonus = R.UNITS[c.queue.type].civ ? (m.settlerPct || 0) : (m.milProdPct || 0);
         else if (c.queue.kind === 'building') bonus = m.bldProdPct || 0;
+        else if (c.queue.kind === 'project') bonus = (m.bldProdPct || 0) + (this.corps.aero && this.corps.aero.owner === p.id && this.corps.aero.active ? R.CORPS.aero.space : 0);
         c.prod += Math.round(y.prod * (1 + bonus / 100)); this.completeProduction(c, p);
       }
       else if (!c.queue) c.prod += Math.floor(y.prod / 2);
-      if (c.attackedTurn !== this.turn) c.hp = Math.min(this.cityMaxHp(c), c.hp + 20);
+      if (c.attackedTurn !== this.turn) c.hp = Math.min(this.cityMaxHp(c), c.hp + 12);
     }
     for (const k of STOCK_KEYS) p.stock[k] += p.sgain[k];
     gpt += p.coinGain || 0;
@@ -1305,19 +1605,25 @@ class World {
     const t0 = Date.now();
     for (const b of [...this.battles.values()]) this.autoBattle(b);
     const occ = this.occMap();
+    this.corpTick();
     this.stockIncome();
     for (const p of this.alivePlayers()) this.economy(p, occ);
     this.processDeals();
+    const crews = new Map();
+    for (const u of this.units.values()) if (u.work && this.tileOwner(u.pos) === u.owner) { const k = u.pos + ':' + u.work.imp; if (!crews.has(k)) crews.set(k, []); crews.get(k).push(u); }
+    for (const [k, us] of crews) {
+      const left = Math.min(...us.map(u => u.work.left)) - Math.min(3, us.length);
+      if (left <= 0) { const pos = us[0].pos; this.imp[pos] = R.IMPS[us[0].work.imp].code; this.msg(us[0].owner, `${R.IMPS[us[0].work.imp].name} 완공${us.length > 1 ? ` (일꾼 ${us.length}명 협동)` : ''}`); for (const u of us) u.work = null; }
+      else for (const u of us) u.work.left = left;
+    }
     for (const u of this.units.values()) {
-      if (u.work) {
-        if (this.tileOwner(u.pos) !== u.owner) u.work = null;
-        else if (--u.work.left <= 0) { this.imp[u.pos] = R.IMPS[u.work.imp].code; this.msg(u.owner, `${R.IMPS[u.work.imp].name} 완공`); u.work = null; }
-      }
-      if (!u.acted && u.hp < 100) {
+      if (u.work && this.tileOwner(u.pos) !== u.owner) u.work = null;
+      if (u.mining && (this.tileOwner(u.pos) !== u.owner || !this.imp[u.pos])) u.mining = false;
+      if (!u.acted && u.hp < R.HPMAX) {
         const inCity = this.cityAt.has(u.pos) && this.cityAt.get(u.pos).owner === u.owner;
-        u.hp = Math.min(100, u.hp + (inCity ? 25 : this.tileOwner(u.pos) === u.owner ? 15 : 10) + (this.M(this.players[u.owner]).heal || 0));
+        u.hp = Math.min(R.HPMAX, u.hp + Math.round(((inCity ? 25 : this.tileOwner(u.pos) === u.owner ? 15 : 10) + (this.M(this.players[u.owner]).heal || 0)) * R.HPMAX / 100));
       }
-      u.moves = u.work ? 0 : this.maxMoves(u); u.attacked = false; u.acted = !!u.work; u.skip = false;
+      u.moves = u.work || u.mining ? 0 : this.maxMoves(u); u.attacked = false; u.acted = !!(u.work || u.mining); u.skip = false;
     }
     this.turn++;
     // 시장 회복, 호감도 감쇠, 신뢰 회복, 조약 만료
@@ -1339,9 +1645,17 @@ class World {
     this.refresh();
     this.computeBorders();
     this.touched = new Set(); this.claimsDirty = false;
+    this._occ = this.occMap();
+    for (const p of this.alivePlayers()) {
+      if (p.shock) p.shock = Math.abs(p.shock) <= 2 ? 0 : p.shock - Math.sign(p.shock) * 2;
+      this.computeStability(p);
+      this.stabilityEvents(p);
+    }
+    this._occ = null;
+    if (this.claimsDirty) { this.refresh(); this.computeBorders(); }
     for (const p of this.alivePlayers()) if (p.isAI) { try { this.aiTurn(p); } catch (e) { console.error('AI error', e); } }
     for (const p of this.players) if (p.isAI && !p.alive && !p.removed && this.turn - (p.diedTurn || 0) > 3) p.removed = true;
-    if (this.alivePlayers().filter(p => p.isAI).length < CFG.AI_COUNT && this.turn % 15 === 0) this.addAI();
+    if (this.alivePlayers().filter(p => p.isAI && !p.rebel).length < CFG.AI_COUNT && this.turn % 15 === 0) this.addAI();
     this.refresh();
     for (const p of this.players) p.score = this.score(p);
     this.turnStart = Date.now();
@@ -1352,7 +1666,7 @@ class World {
   score(p) {
     if (!p.alive || p.removed) return 0;
     const cs = this.citiesOf(p.id);
-    return cs.length * 10 + cs.reduce((s, c) => s + c.pop * 4 + c.buildings.length * 2, 0) + Object.keys(p.techs).length * 6 + (p.policies || []).length * 4 +
+    return cs.length * 10 + cs.reduce((s, c) => s + c.pop * 4 + c.buildings.length * 2, 0) + Object.keys(p.techs).length * 6 + (p.policies || []).length * 4 + Object.values(this.corps).filter(c => c.owner === p.id).length * 20 + (p.launched ? 300 : 0) + (p.space && p.space.satellite ? 30 : 0) +
       this.unitsOf(p.id).filter(u => this.isMil(u)).length;
   }
   tick() {
@@ -1391,13 +1705,14 @@ class World {
     for (const u of this.units.values()) {
       if (u.owner !== pid && !p.visible[u.pos]) continue;
       const o = { id: u.id, o: u.owner, t: u.type, p: u.pos, hp: u.hp, mv: u.moves, mm: this.maxMoves(u), f: u.fort ? 1 : 0, a: u.attacked ? 1 : 0, v: u.vet ? 1 : 0, eq: u.eq || {}, b: u.inBattle ? 1 : 0 };
-      if (u.owner === pid) { o.s = u.skip ? 1 : 0; if (u.work) o.w = u.work; if (u.harv === this.turn) o.h = 1; }
+      if (u.owner === pid) { o.s = u.skip ? 1 : 0; if (u.work) o.w = u.work; if (u.harv === this.turn) o.h = 1; if (u.mining) o.mi = 1; }
+      if (u.mining) o.mi = 1;
       units.push(o);
     }
     const cities = []; let spt = 0, cpt = 0;
     for (const c of this.cities.values()) {
       if (c.owner !== pid && !p.explored[c.pos]) continue;
-      const o = { id: c.id, o: c.owner, name: c.name, p: c.pos, pop: c.pop, hp: c.hp, mhp: this.cityMaxHp(c), str: this.cityStrength(c, occ), cap: c.capital ? 1 : 0 };
+      const o = { id: c.id, o: c.owner, name: c.name, p: c.pos, pop: c.pop, hp: c.hp, mhp: this.cityMaxHp(c), str: this.cityStrength(c, occ), cap: c.capital ? 1 : 0, b: c.buildings };
       if (c.owner === pid) {
         const y = this.cityYields(c, occ); spt += y.sci; cpt += y.cul;
         Object.assign(o, { food: c.food, need: this.foodNeed(c.pop, this.players[c.owner]), prod: c.prod, q: c.queue, qc: this.itemCost(c.queue), y, b: c.buildings, shot: c.shotTurn === this.turn ? 1 : 0, buy: this.buyPrice(c), bought: c.boughtTurn === this.turn ? 1 : 0, stall: c.stallTurn === this.turn - 1 || c.stallTurn === this.turn ? 1 : 0 });
@@ -1411,7 +1726,7 @@ class World {
         if (q.removed) return { id: q.id, removed: 1 };
         const o = { id: q.id, name: q.name, civ: q.civ, color: q.color, ai: q.isAI ? 1 : 0, alive: q.alive, ready: q.ready ? 1 : 0, score: q.score || 0,
           online: q.isAI || !!q.ws, cities: q.alive ? this.citiesOf(q.id).length : 0, techs: Object.keys(q.techs).length, met: p.met[q.id] ? 1 : 0,
-          prot: !q.isAI && q.protectUntil > this.turn ? q.protectUntil : 0, trust: Math.round(q.trust == null ? 60 : q.trust), gov: q.id === pid || p.met[q.id] ? q.gov : null, pol: q.id === pid || p.met[q.id] ? (q.policies || []).length : 0 };
+          prot: !q.isAI && q.protectUntil > this.turn ? q.protectUntil : 0, trust: Math.round(q.trust == null ? 60 : q.trust), gov: q.id === pid || p.met[q.id] ? q.gov : null, rebel: q.rebel ? 1 : 0, stab: q.id === pid || p.met[q.id] ? Math.round(q.stab == null ? 70 : q.stab) : null, launched: q.launched || 0, pol: q.id === pid || p.met[q.id] ? (q.policies || []).length : 0 };
         if (q.id !== pid) {
           const r = this.rel(pid, q.id);
           Object.assign(o, { d: r.state, al: r.alliance ? 1 : 0, ob: r.openUntil > this.turn ? r.openUntil : 0, nap: r.napUntil > this.turn ? r.napUntil : 0,
@@ -1421,10 +1736,15 @@ class World {
       }),
       my: { gold: p.gold, gpt: p.gpt, spt, sci: p.sciStore, techs: Object.keys(p.techs), paid: Object.keys(p.paid || {}), res: p.researching, rcost: p.researching ? this.techCost(p.researching) : 0,
         units: this.unitsOf(pid).length, free: this.freeUnits(p), alive: p.alive, mil: this.milPower(pid),
+        stab: Math.round(p.stab == null ? 70 : p.stab), stabT: Math.round(p.stabT == null ? 70 : p.stabT), stabParts: p.stabParts || [], festCost: 30 + 15 * this.citiesOf(pid).length, festTurn: p.festTurn || -99,
+        space: p.space, launched: p.launched || 0,
         culture: Math.floor(p.culture || 0), cpt, policies: p.policies || [], gov: p.gov, govTurn: p.govTurn, anarchy: this.anarchy(p) ? p.anarchyUntil : 0, pcost: this.policyCost(p), mods: this.M(p),
         stock: p.stock, sgain: p.sgain, armory: p.armory, trust: Math.round(p.trust == null ? 60 : p.trust),
         prot: p.protectUntil > this.turn ? p.protectUntil : 0, tcosts: Object.fromEntries(R.availTechs(p.techs).map(k => [k, this.techCost(k)])) },
       props: this.props.filter(x => x.to === pid || x.from === pid),
+      corps: Object.fromEntries(Object.entries(this.corps).map(([id, c]) => { const hq = this.cities.get(c.hq); return [id, { owner: c.owner, hq: c.hq, hqName: hq ? hq.name : '?', hqPos: hq ? hq.pos : -1, branches: c.branches.map(cid => { const x = this.cities.get(cid); return x ? { id: cid, name: x.name, o: x.owner } : null; }).filter(Boolean), active: c.active, income: c.income || 0 }]; })),
+      history: this.history.slice(-30),
+      space: this.players.filter(q => q.alive && !q.removed && (q.launched || (q.space && (q.space.booster || q.space.habitat || q.space.engine || q.space.satellite)))).map(q => ({ id: q.id, ...q.space, launched: q.launched || 0 })),
       deals: myDeals,
       market: Object.fromEntries(STOCK_KEYS.map(k => [k, { buy: this.buyPrice1(k, p), sell: this.sellPrice1(k, p), stock: Math.round(this.market.stock[k]) }])),
       battles: [...this.battles.values()].filter(b => b.att === pid || b.dOwners.includes(pid)).map(b => b.id),
@@ -1435,7 +1755,7 @@ class World {
     if (impStr !== p.sentImp) { st.imp = impStr; p.sentImp = impStr; }
     return st;
   }
-  mapMsg() { return { t: 'map', ver: 3, W: this.W, H: this.H, terr: this.terr, res: this.res }; }
+  mapMsg() { return { t: 'map', ver: 4, W: this.W, H: this.H, terr: this.terr, res: this.res }; }
 
   // ───────────────────────── AI ─────────────────────────
   milPower(id) { let s = 0; for (const u of this.units.values()) if (u.owner === id && this.isMil(u)) { const U = R.UNITS[u.type]; s += U.str + (U.rstr || 0) + this.eqAtk(u) + this.eqDef(u); } return s; }
@@ -1564,6 +1884,7 @@ class World {
       for (const tk of p.aiTrees || Object.keys(R.POLICY_TREES)) {
         const tree = R.POLICY_TREES[tk];
         if (tree.tech && !p.techs[tree.tech]) continue;
+        if (tree.ideo && p.policies.some(id => R.POLICY_TREES[R.POLICY[id].tree].ideo && R.POLICY[id].tree !== tk)) continue;
         const nx = tree.policies.find(x => !p.policies.includes(x.id));
         if (nx) { pick = nx; break; }
       }
@@ -1571,9 +1892,30 @@ class World {
       p.culture -= cost; p.policies.push(pick.id);
     }
   }
+  aiEconomy(p) {
+    // 안정도 관리
+    if (p.stab < 38 && p.gold > 60 + 15 * this.citiesOf(p.id).length && this.turn - (p.festTurn || -99) >= 8) { const cost = 30 + 15 * this.citiesOf(p.id).length; p.gold -= cost; p.festTurn = this.turn; p.shock = (p.shock || 0) + 12; }
+    // 기업 설립·지사
+    const cs = this.citiesOf(p.id);
+    for (const [id, def] of Object.entries(R.CORPS)) {
+      if (this.corps[id] || !p.techs[def.tech] || p.gold < R.CORP_COST.found + 50 || !R.hasRes(p.stock, def.found) || !cs.length) continue;
+      const hq = cs.slice().sort((a, b) => b.pop - a.pop)[0];
+      p.gold -= R.CORP_COST.found; for (const k in def.found) p.stock[k] -= def.found[k];
+      this.corps[id] = { owner: p.id, hq: hq.id, branches: [hq.id], active: true, income: 0, founded: this.turn };
+      this.addHistory(`[${p.name}]이(가) ${hq.name}에 ${def.name} 본사를 세웠습니다`);
+      break;
+    }
+    for (const [id, c] of Object.entries(this.corps)) {
+      if (c.owner !== p.id) continue;
+      const target = cs.find(x => !c.branches.includes(x.id));
+      if (target && p.gold > R.CORP_COST.branch + 80) { p.gold -= R.CORP_COST.branch; c.branches.push(target.id); }
+    }
+    this.rebuildCorpMap();
+  }
   aiTurn(p) {
     if (!p.researching) this.aiResearch(p);
     this.aiCulture(p);
+    this.aiEconomy(p);
     const myCities = this.citiesOf(p.id);
     this.aiDiplomacy(p, myCities);
     // 시장: 남는 것 수출
@@ -1605,7 +1947,9 @@ class World {
         const eq = R.availEquip(p.techs).filter(k => R.hasRes(p.stock, R.EQUIP[k].res));
         const armoryN = Object.values(p.armory).reduce((s, v) => s + v, 0);
         const avB = R.availBuildings(p.techs, c.buildings).filter(k => R.hasRes(p.stock, R.BUILDINGS[k].res)).sort((a, b) => R.BUILDINGS[a].cost - R.BUILDINGS[b].cost);
-        if (eq.length && armoryN < 2 && mils.length > 3 && this.rnd() < 0.35) q = { kind: 'equip', type: eq.sort((a, b) => R.EQUIP[b].cost - R.EQUIP[a].cost)[0] };
+        const proj = c.buildings.includes('launchpad') ? Object.keys(R.PROJECTS).find(t => !this.canProject(p, c, t)) : null;
+        if (proj && R.hasRes(p.stock, R.PROJECTS[proj].res)) q = { kind: 'project', type: proj };
+        else if (eq.length && armoryN < 2 && mils.length > 3 && this.rnd() < 0.35) q = { kind: 'equip', type: eq.sort((a, b) => R.EQUIP[b].cost - R.EQUIP[a].cost)[0] };
         else if (avB.length) q = { kind: 'building', type: avB[0] };
         else q = { kind: 'process', type: this.rnd() < 0.5 ? 'wealth' : 'research' };
       }
@@ -1666,7 +2010,7 @@ class World {
           if (best != null && bs > 1.15) { this.startBattle(p.id, stack.map(x => x.id), best); break; }
         }
         if (isGuard && (enemies.length || this.turn < 60)) { u.fort = true; break; }
-        if (u.hp < 45 && homeField) { if (!this.aiStepToward(u, homeField, occ)) { u.fort = true; break; } continue; }
+        if (u.hp < R.HPMAX * 0.45 && homeField) { if (!this.aiStepToward(u, homeField, occ)) { u.fort = true; break; } continue; }
         if (u.type === 'scout' || (!enemies.length && mils.length > myCities.length * 2 && u.id % 4 === 0)) {
           if (!exploreField) {
             const unk = []; for (let i = 0; i < this.N; i++) if (!p.explored[i] && R.TERRAIN[this.terr[i]].pass && i % 3 === 0) unk.push(i);
@@ -1701,6 +2045,11 @@ class World {
         if (d < bd) { bd = d; target = i; }
       }
     }
+    if (target == null && !u.mining) {
+      const spot = this.imp[u.pos] && this.tileOwner(u.pos) === p.id && this.mineOutput(p, u.pos) ? u.pos : null;
+      if (spot != null) { u.mining = true; u.moves = 0; return; }
+    }
+    if (u.mining) return;
     if (target == null) { if (this.res[u.pos] && R.RES[this.res[u.pos]].stock && R.impTechOk(this.terr[u.pos], this.res[u.pos], p.techs) && this.tileOwner(u.pos) === p.id && u.harv !== this.turn) { p.stock[R.RES[this.res[u.pos]].stock]++; u.harv = this.turn; u.moves = 0; } return; }
     u.aiT = target;
     this.aiStepToward(u, this.distField([target], 20), occ);
@@ -1728,23 +2077,78 @@ class World {
 }
 
 // ───────────────────────── 서버 ─────────────────────────
-let world = null;
-function loadWorld() {
-  try {
-    if (fs.existsSync(SAVE_FILE)) {
-      const data = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8'));
-      if (data.v !== 3) { console.log('이전 버전 저장 파일이라 새 세계를 만듭니다'); return new World(null); }
-      const w = new World(data);
-      console.log(`저장된 월드 불러옴: ${w.turn}턴, 플레이어 ${w.players.length}명`);
-      return w;
-    }
-  } catch (e) { console.error('월드 불러오기 실패, 새로 생성합니다', e.message); }
+// ── 저장소: GitHub Gist(권장, 무료로 영구 보관) 또는 로컬 디스크 ──
+const zlib = require('zlib');
+const GIST_ID = process.env.GIST_ID, GH_TOKEN = process.env.GITHUB_TOKEN, GIST_FILE = 'civwar-world.b64';
+const useGist = !!(GIST_ID && GH_TOKEN);
+const ghHeaders = () => ({ Authorization: `Bearer ${GH_TOKEN}`, Accept: 'application/vnd.github+json', 'User-Agent': 'civwar-server', 'X-GitHub-Api-Version': '2022-11-28' });
+function packWorld(json) { return zlib.gzipSync(Buffer.from(json, 'utf8'), { level: 9 }).toString('base64'); }
+function unpackWorld(b64) { return zlib.gunzipSync(Buffer.from(b64.trim(), 'base64')).toString('utf8'); }
+async function loadFromGist() {
+  const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, { headers: ghHeaders() });
+  if (!r.ok) throw new Error('Gist 읽기 실패 ' + r.status);
+  const g = await r.json(), f = g.files && g.files[GIST_FILE];
+  if (!f) return null;
+  let content = f.content;
+  if (f.truncated || !content) { const rr = await fetch(f.raw_url, { headers: ghHeaders() }); content = await rr.text(); }
+  if (!content || content.length < 20) return null;
+  return JSON.parse(unpackWorld(content));
+}
+async function saveToGist(json) {
+  const r = await fetch(`https://api.github.com/gists/${GIST_ID}`, { method: 'PATCH', headers: Object.assign({ 'Content-Type': 'application/json' }, ghHeaders()), body: JSON.stringify({ files: { [GIST_FILE]: { content: packWorld(json) } } }) });
+  if (!r.ok) throw new Error('Gist 저장 실패 ' + r.status + ' ' + (await r.text()).slice(0, 120));
+}
+// 예전 버전 저장 파일도 버리지 않고 새 규칙에 맞게 고쳐서 불러옴
+function migrate(s) {
+  const N = s.W * s.H;
+  s.corps = s.corps || {}; s.history = s.history || []; s.rels = s.rels || {}; s.deals = s.deals || []; s.props = s.props || [];
+  s.imp = s.imp || new Array(N).fill('');
+  if (!s.market) s.market = { stock: Object.fromEntries(Object.keys(R.STOCK).map(k => [k, 50])) };
+  for (const p of s.players) {
+    const emp = Object.fromEntries(Object.keys(R.STOCK).map(k => [k, 0]));
+    p.stock = Object.assign(emp, p.stock || {}); p.armory = p.armory || {}; p.paid = p.paid || {}; p.mods = p.mods || {}; p.met = p.met || {};
+    if (p.trust == null) p.trust = 60;
+    if (p.culture == null) p.culture = 0; p.policies = (p.policies || []).filter(id => R.POLICY[id]);
+    if (!R.GOVS[p.gov]) p.gov = 'tribal'; if (p.anarchyUntil == null) p.anarchyUntil = 0; if (p.govTurn == null) p.govTurn = -99;
+    if (p.stab == null) { p.stab = 70; p.stabT = 70; p.shock = 0; p.lastEvent = s.turn; }
+    p.space = p.space || { satellite: 0, booster: 0, habitat: 0, engine: 0 }; p.launched = p.launched || 0;
+    p.aiTrees = (p.aiTrees || []).filter(t => R.POLICY_TREES[t]); for (const t of Object.keys(R.POLICY_TREES)) if (!p.aiTrees.includes(t)) p.aiTrees.push(t);
+    p.aiGovs = p.aiGovs || Object.keys(R.GOVS).filter(g => g !== 'tribal');
+    for (const k of Object.keys(p.techs || {})) if (!R.TECHS[k]) delete p.techs[k];
+    if (p.researching && !R.TECHS[p.researching]) p.researching = null;
+  }
+  for (const u of s.units) { if (!R.UNITS[u.type]) u.type = 'warrior'; u.eq = u.eq || {}; if (u.hp > R.HPMAX) u.hp = Math.max(1, Math.round(u.hp * R.HPMAX / 100)); u.inBattle = null; }
+  for (const c of s.cities) {
+    c.buildings = (c.buildings || []).filter(b => R.BUILDINGS[b]);
+    if (c.hp > R.CITY_HP + 80) c.hp = Math.round(c.hp * 0.6);
+    if (c.queue && ((c.queue.kind === 'unit' && !R.UNITS[c.queue.type]) || (c.queue.kind === 'building' && !R.BUILDINGS[c.queue.type]))) c.queue = null;
+  }
+  s.v = 4;
+  return s;
+}
+async function loadWorld() {
+  let data = null, from = '';
+  if (useGist) { try { data = await loadFromGist(); from = 'Gist'; } catch (e) { console.error(e.message); } }
+  if (!data) { try { if (fs.existsSync(SAVE_FILE)) { data = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8')); from = '로컬 파일'; } } catch (e) { console.error('로컬 저장 읽기 실패', e.message); } }
+  if (data && data.v >= 2 && data.players && data.W) {
+    try { const w = new World(migrate(data)); console.log(`저장된 세계를 불러왔습니다 (${from}, ${w.turn}턴, 문명 ${w.alivePlayers().length}개)`); return w; }
+    catch (e) { console.error('저장 파일 변환 실패, 새 세계를 만듭니다', e); }
+  }
+  console.log('새 세계를 만듭니다' + (useGist ? '' : ' (GIST_ID/GITHUB_TOKEN이 없으면 서버가 잠들 때 세계가 초기화될 수 있어요)'));
   return new World(null);
 }
-function saveWorld() {
-  if (!world) return;
-  try { fs.mkdirSync(CFG.DATA_DIR, { recursive: true }); fs.writeFileSync(SAVE_FILE + '.tmp', world.serialize()); fs.renameSync(SAVE_FILE + '.tmp', SAVE_FILE); }
-  catch (e) { console.error('저장 실패', e.message); }
+let world = null, saving = false, lastSavedTurn = -1, lastSaveAt = 0;
+async function saveWorld(force) {
+  if (!world || saving) return;
+  if (!force && world.turn === lastSavedTurn && Date.now() - lastSaveAt < 10 * 60 * 1000) return;
+  saving = true;
+  try {
+    const json = world.serialize();
+    try { fs.mkdirSync(CFG.DATA_DIR, { recursive: true }); fs.writeFileSync(SAVE_FILE + '.tmp', json); fs.renameSync(SAVE_FILE + '.tmp', SAVE_FILE); } catch (e) { console.error('로컬 저장 실패', e.message); }
+    if (useGist) await saveToGist(json);
+    lastSavedTurn = world.turn; lastSaveAt = Date.now();
+  } catch (e) { console.error(e.message); }
+  saving = false;
 }
 
 const chat = [];
@@ -1832,16 +2236,19 @@ function handle(ws, m) {
   }
 }
 
-function boot(w) {
-  world = w || loadWorld();
+async function boot(w) {
+  world = w || await loadWorld();
   setInterval(() => { try { world.tick(); world.flush(); } catch (e) { console.error(e); } }, 150);
   setInterval(() => { for (const p of world.players) if (p.ws) p.ws.ping(); }, 25000);
-  setInterval(saveWorld, 60000);
+  setInterval(() => saveWorld(false), (useGist ? 120 : 60) * 1000);
   setInterval(() => world.cleanupInactive(), 10 * 60 * 1000);
-  const bye = () => { saveWorld(); process.exit(0); };
+  // 선택: KEEP_AWAKE=1 이면 스스로 접속해 Render 무료 서버가 잠들지 않게 함 (무료 사용 시간을 씀)
+  if (process.env.KEEP_AWAKE === '1' && process.env.RENDER_EXTERNAL_URL) setInterval(() => fetch(process.env.RENDER_EXTERNAL_URL + '/health').catch(() => {}), 10 * 60 * 1000);
+  let quitting = false;
+  const bye = async () => { if (quitting) return; quitting = true; console.log('종료 전 세계를 저장합니다…'); await saveWorld(true); process.exit(0); };
   process.on('SIGTERM', bye); process.on('SIGINT', bye);
-  server.listen(PORT, () => console.log(`문명 전쟁 월드 서버: http://localhost:${PORT} (턴 ${CFG.TURN_SECONDS}초, 맵 ${world.W}x${world.H})`));
+  server.listen(PORT, () => console.log(`문명 전쟁 월드 서버: http://localhost:${PORT} (턴 ${CFG.TURN_SECONDS}초, 맵 ${world.W}x${world.H}, 저장소 ${useGist ? 'GitHub Gist' : '로컬 디스크'})`));
   return world;
 }
 if (require.main === module) boot();
-module.exports = { World, genMap, CFG, boot };
+module.exports = { World, genMap, CFG, boot, migrate, packWorld, unpackWorld };
