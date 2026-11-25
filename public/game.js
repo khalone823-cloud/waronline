@@ -4,7 +4,7 @@ const R = RULES, IC = ICONS, $ = s => document.querySelector(s);
 const ic = (n, s, c) => IC.svg(n, s || 16, c);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const STOCK_KEYS = Object.keys(R.STOCK);
-const CLIENT_VER = 3;
+const CLIENT_VER = 4;
 const RES_COLOR = { wheat: '#f2d16b', fish: '#7dd3fc', horse: '#d9b38c', copper: '#e0894a', stone: '#c4beb8', gold: '#f0c35a', iron: '#a9c1d9', saltpeter: '#f3efe2', coal: '#9ca3af' };
 
 let ws = null, token = localStorage.getItem('civwar_token') || null, savedName = localStorage.getItem('civwar_myname') || '';
@@ -34,7 +34,7 @@ function resChips(res, mult) {
 }
 function resText(res) { return Object.entries(res || {}).filter(([, v]) => v > 0).map(([k, v]) => `${R.STOCK[k].name} ${v}`).join(', '); }
 function bar(v, max, col) { return `<div class="bar"><i style="width:${Math.max(0, Math.min(100, v / Math.max(1, max) * 100))}%;background:${col}"></i></div>`; }
-function hpCol(hp) { return hp > 60 ? '#4ade80' : hp > 30 ? '#facc15' : '#ef5350'; }
+function hpCol(hp) { const p = hp / R.HPMAX * 100; return p > 60 ? '#4ade80' : p > 30 ? '#facc15' : '#ef5350'; }
 
 // ───────── 연결 ─────────
 function connect() {
@@ -125,6 +125,19 @@ const DIR_CORNER = [0, 5, 4, 3, 2, 1];
 function nbDir(i, d) { const x = i % MAP.W, y = (i / MAP.W) | 0; const [dx, dy] = ((y & 1) ? DIRS_O : DIRS_E)[d]; const nx = x + dx, ny = y + dy; return nx < 0 || ny < 0 || nx >= MAP.W || ny >= MAP.H ? -1 : ny * MAP.W + nx; }
 function hash(i, k) { let h = (i * 374761393 + k * 668265263) | 0; h = (h ^ (h >>> 13)) * 1274126177; return ((h ^ (h >>> 16)) >>> 0) / 4294967296; }
 function shade(hex, f) { const n = parseInt(hex.slice(1), 16); const r = Math.min(255, (n >> 16) * f), g = Math.min(255, ((n >> 8) & 255) * f), b = Math.min(255, (n & 255) * f); return `rgb(${r | 0},${g | 0},${b | 0})`; }
+// ───────── 지형·자원·시설 그래픽 ─────────
+function lighten(hex, f) { return shade(hex, f); }
+function edgeSeg(cx, cy, d, inset) { const k = DIR_CORNER[d]; return [corner(cx, cy, k, HS - inset), corner(cx, cy, (k + 1) % 6, HS - inset)]; }
+function tree(c, x, y, s, dark, light) {
+  c.fillStyle = '#00000033'; c.beginPath(); c.ellipse(x + 2, y + s * 0.9, s * 0.9, s * 0.35, 0, 0, 7); c.fill();
+  c.fillStyle = '#4a3220'; c.fillRect(x - 1, y + s * 0.2, 2, s * 0.7);
+  c.fillStyle = dark; c.beginPath(); c.arc(x, y, s, 0, 7); c.fill();
+  c.fillStyle = light; c.beginPath(); c.arc(x - s * 0.3, y - s * 0.3, s * 0.55, 0, 7); c.fill();
+}
+function pine(c, x, y, s) {
+  c.fillStyle = '#00000030'; c.beginPath(); c.ellipse(x + 2, y + s * 0.6, s * 0.7, s * 0.25, 0, 0, 7); c.fill();
+  for (let k = 0; k < 3; k++) { const w = s * (1 - k * 0.25), yy = y - k * s * 0.45; c.fillStyle = k % 2 ? '#2a5a34' : '#22492b'; c.beginPath(); c.moveTo(x, yy - s * 0.7); c.lineTo(x - w * 0.7, yy + s * 0.4); c.lineTo(x + w * 0.7, yy + s * 0.4); c.fill(); }
+}
 function buildTerrain() {
   worldW = MAP.W * SQ3 * HS + SQ3 * HS / 2; worldH = MAP.H * 1.5 * HS + HS / 2;
   kScale = Math.min(1.6, 3800 / worldW, 3800 / worldH);
@@ -132,38 +145,124 @@ function buildTerrain() {
   overCv = document.createElement('canvas'); overCv.width = terrCv.width; overCv.height = terrCv.height;
   const c = terrCv.getContext('2d'); c.scale(kScale, kScale);
   c.fillStyle = '#05070d'; c.fillRect(0, 0, worldW, worldH);
-  for (let i = 0; i < MAP.W * MAP.H; i++) {
-    const t = MAP.terr[i], T = R.TERRAIN[t], [cx, cy] = center(i);
-    hexPath(c, cx, cy, HS + 0.6); c.fillStyle = shade(T.color, 0.92 + hash(i, 1) * 0.16); c.fill();
+  const N = MAP.W * MAP.H, isOcean = i => MAP.terr[i] === 'ocean';
+  // 바다 깊이
+  const depth = new Array(N).fill(9);
+  let frontier = []; for (let i = 0; i < N; i++) if (!isOcean(i)) { depth[i] = 0; frontier.push(i); }
+  for (let d = 1; d < 5 && frontier.length; d++) { const nf = []; for (const i of frontier) for (let k = 0; k < 6; k++) { const n = nbDir(i, k); if (n >= 0 && depth[n] > d) { depth[n] = d; nf.push(n); } } frontier = nf; }
+  for (let i = 0; i < N; i++) {
+    const t = MAP.terr[i], T = R.TERRAIN[t], [cx, cy] = center(i), v = 0.94 + hash(i, 1) * 0.12;
+    let base = T.color;
+    if (t === 'ocean') base = ['#3b86b8', '#2f73a8', '#265f94', '#1f4f86', '#1b4579'][Math.min(4, depth[i] - 1)] || '#183e70';
+    const g = c.createRadialGradient(cx - 7, cy - 9, 3, cx, cy, HS * 1.1);
+    g.addColorStop(0, shade(base, 1.12 * v)); g.addColorStop(1, shade(base, 0.8 * v));
+    hexPath(c, cx, cy, HS + 0.7); c.fillStyle = g; c.fill();
     c.save(); hexPath(c, cx, cy, HS); c.clip();
     if (t === 'ocean') {
-      const coast = [0, 1, 2, 3, 4, 5].some(d => { const n = nbDir(i, d); return n >= 0 && MAP.terr[n] !== 'ocean'; });
-      if (coast) { hexPath(c, cx, cy, HS); c.fillStyle = '#2f6aa8'; c.fill(); }
-      c.strokeStyle = '#ffffff22'; c.lineWidth = 1.2;
-      for (let k = 0; k < 2; k++) { const ox = cx + (hash(i, 10 + k) - 0.5) * 30, oy = cy + (hash(i, 20 + k) - 0.5) * 26; c.beginPath(); c.arc(ox, oy, 5, Math.PI * 1.1, Math.PI * 1.9); c.stroke(); }
-    } else if (t === 'forest') {
-      for (let k = 0; k < 5; k++) { const ox = cx + (hash(i, 10 + k) - 0.5) * 34, oy = cy + (hash(i, 20 + k) - 0.5) * 30; c.fillStyle = k % 2 ? '#1f4d1d' : '#245a22'; c.beginPath(); c.moveTo(ox, oy - 9); c.lineTo(ox - 6, oy + 5); c.lineTo(ox + 6, oy + 5); c.fill(); c.fillStyle = '#4a3220'; c.fillRect(ox - 1, oy + 5, 2, 3); }
-    } else if (t === 'hills') {
-      c.strokeStyle = '#5e4d2b'; c.lineWidth = 2.2;
-      for (let k = 0; k < 3; k++) { const ox = cx + (k - 1) * 13 + (hash(i, k) - 0.5) * 6, oy = cy + (hash(i, 5 + k) - 0.5) * 14; c.beginPath(); c.arc(ox, oy + 6, 9, Math.PI * 1.15, Math.PI * 1.85); c.stroke(); }
-    } else if (t === 'mountain') {
-      for (let k = 0; k < 2; k++) { const ox = cx + (k ? 9 : -7), oy = cy + (k ? 6 : 0), h = k ? 16 : 22; c.fillStyle = '#5b5b62'; c.beginPath(); c.moveTo(ox, oy - h); c.lineTo(ox - 13, oy + 10); c.lineTo(ox + 13, oy + 10); c.fill(); c.fillStyle = '#eef2f7'; c.beginPath(); c.moveTo(ox, oy - h); c.lineTo(ox - 5, oy - h + 8); c.lineTo(ox + 5, oy - h + 8); c.fill(); }
-    } else if (t === 'desert') {
-      c.fillStyle = '#b89c55'; for (let k = 0; k < 8; k++) c.fillRect(cx + (hash(i, 10 + k) - 0.5) * 36, cy + (hash(i, 20 + k) - 0.5) * 32, 2, 2);
+      c.strokeStyle = depth[i] <= 1 ? '#ffffff38' : '#ffffff1c'; c.lineWidth = 1.3;
+      for (let k = 0; k < 3; k++) { const ox = cx + (hash(i, 10 + k) - 0.5) * 34, oy = cy + (hash(i, 20 + k) - 0.5) * 30; c.beginPath(); c.arc(ox, oy, 4 + hash(i, 30 + k) * 3, Math.PI * 1.15, Math.PI * 1.85); c.stroke(); }
+      for (let d = 0; d < 6; d++) { const n = nbDir(i, d); if (n >= 0 && !isOcean(n)) { const [[x1, y1], [x2, y2]] = edgeSeg(cx, cy, d, 1); c.strokeStyle = '#e8f6ffaa'; c.lineWidth = 3; c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); const [[a1, b1], [a2, b2]] = edgeSeg(cx, cy, d, 5); c.strokeStyle = '#d7f0ff44'; c.lineWidth = 2; c.beginPath(); c.moveTo(a1, b1); c.lineTo(a2, b2); c.stroke(); } }
     } else if (t === 'grass' || t === 'plains') {
-      c.strokeStyle = t === 'grass' ? '#3f7a2a' : '#878c38'; c.lineWidth = 1;
-      for (let k = 0; k < 6; k++) { const ox = cx + (hash(i, 10 + k) - 0.5) * 36, oy = cy + (hash(i, 20 + k) - 0.5) * 32; c.beginPath(); c.moveTo(ox, oy); c.lineTo(ox - 2, oy - 5); c.moveTo(ox, oy); c.lineTo(ox + 2, oy - 5); c.stroke(); }
+      const dark = t === 'grass' ? '#3c7428' : '#7f8436', lite = t === 'grass' ? '#86c25a' : '#cfd06b';
+      for (let k = 0; k < 14; k++) { const ox = cx + (hash(i, 10 + k) - 0.5) * 44, oy = cy + (hash(i, 40 + k) - 0.5) * 40; c.strokeStyle = k % 3 ? dark : lite; c.lineWidth = 1; c.beginPath(); c.moveTo(ox, oy); c.lineTo(ox - 1.5, oy - 4); c.moveTo(ox, oy); c.lineTo(ox + 1.5, oy - 4); c.stroke(); }
+      if (t === 'grass') for (let k = 0; k < 3; k++) if (hash(i, 70 + k) < 0.5) { c.fillStyle = ['#f4e36b', '#f6f6f6', '#e88bd0'][k]; c.beginPath(); c.arc(cx + (hash(i, 80 + k) - 0.5) * 36, cy + (hash(i, 90 + k) - 0.5) * 32, 1.4, 0, 7); c.fill(); }
+      if (t === 'plains') { c.fillStyle = '#b9a15a40'; c.beginPath(); c.ellipse(cx + (hash(i, 5) - 0.5) * 20, cy + (hash(i, 6) - 0.5) * 16, 12, 6, hash(i, 7), 0, 7); c.fill(); }
+    } else if (t === 'forest') {
+      const pts = []; for (let k = 0; k < 7; k++) pts.push([cx + (hash(i, 10 + k) - 0.5) * 38, cy + (hash(i, 20 + k) - 0.5) * 34]);
+      pts.sort((a, b) => a[1] - b[1]);
+      for (const [x, y] of pts) tree(c, x, y, 6 + hash(i, x | 0) * 2, '#1f5220', '#3d7f32');
+    } else if (t === 'hills') {
+      for (let k = 0; k < 3; k++) {
+        const ox = cx + (k - 1) * 14 + (hash(i, k) - 0.5) * 6, oy = cy + 6 + (hash(i, 5 + k) - 0.5) * 10, w = 13 + hash(i, 9 + k) * 4;
+        const hg = c.createLinearGradient(ox - w, oy - w, ox + w, oy); hg.addColorStop(0, '#b9a26a'); hg.addColorStop(1, '#6b5832');
+        c.fillStyle = hg; c.beginPath(); c.ellipse(ox, oy, w, w * 0.62, 0, Math.PI, 0); c.fill();
+        c.strokeStyle = '#5a4a2a'; c.lineWidth = 1; c.stroke();
+      }
+    } else if (t === 'mountain') {
+      const peaks = [[-8, 4, 22], [9, 8, 17], [0, 12, 12]];
+      for (const [dx, dy, h] of peaks) {
+        const x = cx + dx, y = cy + dy;
+        c.fillStyle = '#6d6d76'; c.beginPath(); c.moveTo(x, y - h); c.lineTo(x - h * 0.75, y + 8); c.lineTo(x, y + 8); c.fill();
+        c.fillStyle = '#4c4c55'; c.beginPath(); c.moveTo(x, y - h); c.lineTo(x + h * 0.75, y + 8); c.lineTo(x, y + 8); c.fill();
+        c.fillStyle = '#f4f7fb'; c.beginPath(); c.moveTo(x, y - h); c.lineTo(x - h * 0.28, y - h * 0.58); c.lineTo(x - h * 0.05, y - h * 0.66); c.lineTo(x + h * 0.25, y - h * 0.56); c.fill();
+      }
+    } else if (t === 'desert') {
+      for (let k = 0; k < 3; k++) { const oy = cy - 12 + k * 11 + (hash(i, k) - 0.5) * 4; c.strokeStyle = k % 2 ? '#c9ad66' : '#f0dc9a'; c.lineWidth = 2; c.beginPath(); c.moveTo(cx - 26, oy); c.quadraticCurveTo(cx, oy - 6 + hash(i, 3 + k) * 4, cx + 26, oy + 2); c.stroke(); }
+      if (hash(i, 50) < 0.35) { const x = cx + (hash(i, 51) - 0.5) * 24, y = cy + (hash(i, 52) - 0.5) * 18; c.strokeStyle = '#4f7a3a'; c.lineWidth = 3; c.lineCap = 'round'; c.beginPath(); c.moveTo(x, y + 6); c.lineTo(x, y - 6); c.moveTo(x, y); c.lineTo(x - 4, y - 2); c.lineTo(x - 4, y - 5); c.moveTo(x, y - 2); c.lineTo(x + 4, y - 4); c.lineTo(x + 4, y - 7); c.stroke(); c.lineCap = 'butt'; }
     } else if (t === 'tundra') {
-      c.fillStyle = '#e8eef0aa'; for (let k = 0; k < 4; k++) { c.beginPath(); c.arc(cx + (hash(i, 10 + k) - 0.5) * 32, cy + (hash(i, 20 + k) - 0.5) * 28, 4, 0, 7); c.fill(); }
+      for (let k = 0; k < 4; k++) { c.fillStyle = '#eef3f5b0'; c.beginPath(); c.ellipse(cx + (hash(i, 10 + k) - 0.5) * 34, cy + (hash(i, 20 + k) - 0.5) * 30, 6, 3, 0, 0, 7); c.fill(); }
+      if (hash(i, 60) < 0.5) pine(c, cx + (hash(i, 61) - 0.5) * 20, cy + (hash(i, 62) - 0.5) * 16, 7);
     }
+    if (t !== 'ocean') for (let d = 0; d < 6; d++) { const n = nbDir(i, d); if (n >= 0 && isOcean(n)) { const [[x1, y1], [x2, y2]] = edgeSeg(cx, cy, d, 2.5); c.strokeStyle = '#e6d59ccc'; c.lineWidth = 5; c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.stroke(); } }
     c.restore();
-    hexPath(c, cx, cy, HS); c.strokeStyle = '#00000022'; c.lineWidth = 1; c.stroke();
+    hexPath(c, cx, cy, HS); c.strokeStyle = '#00000026'; c.lineWidth = 1; c.stroke();
   }
   miniBase = document.createElement('canvas'); miniBase.width = MAP.W * 2 + 1; miniBase.height = MAP.H * 2;
 }
-function badgeIcon(c, name, x, y, col, size) {
-  c.beginPath(); c.arc(x, y, size * 0.72, 0, 7); c.fillStyle = '#0a0e18cc'; c.fill(); c.strokeStyle = '#ffffff30'; c.lineWidth = 1; c.stroke();
-  IC.draw(c, name, x, y, size, col, 2.4);
+// 광물·자원을 실제 모양으로
+function rocks(c, x, y, s, rock, fleck, seed) {
+  const pts = [[-5, 2, 5], [3, 3, 4.5], [-1, -2, 4], [6, -1, 3]];
+  for (const [dx, dy, r] of pts) {
+    const rx = x + dx * s, ry = y + dy * s, rr = r * s;
+    c.fillStyle = '#00000040'; c.beginPath(); c.ellipse(rx + 1.5, ry + rr * 0.7, rr, rr * 0.4, 0, 0, 7); c.fill();
+    const g = c.createLinearGradient(rx - rr, ry - rr, rx + rr, ry + rr); g.addColorStop(0, shade(rock, 1.25)); g.addColorStop(1, shade(rock, 0.7));
+    c.fillStyle = g; c.beginPath(); c.moveTo(rx - rr, ry + rr * 0.5); c.lineTo(rx - rr * 0.6, ry - rr * 0.7); c.lineTo(rx + rr * 0.4, ry - rr); c.lineTo(rx + rr, ry - rr * 0.1); c.lineTo(rx + rr * 0.7, ry + rr * 0.6); c.closePath(); c.fill();
+    if (fleck) { c.fillStyle = fleck; for (let k = 0; k < 3; k++) { c.beginPath(); c.arc(rx + (hash(seed, k + dx) - 0.5) * rr * 1.2, ry + (hash(seed, k + dy + 9) - 0.5) * rr, Math.max(0.9, rr * 0.22), 0, 7); c.fill(); } }
+  }
+}
+function drawResource(c, r, x, y, i) {
+  const s = 1;
+  if (r === 'wheat') {
+    for (let k = 0; k < 4; k++) { const sx = x - 6 + k * 4, sy = y + 6; c.strokeStyle = '#b8892a'; c.lineWidth = 1.2; c.beginPath(); c.moveTo(sx, sy); c.lineTo(sx + 1, sy - 12); c.stroke(); c.fillStyle = '#f2cf5b'; for (let j = 0; j < 4; j++) { c.beginPath(); c.ellipse(sx + 1 + (j % 2 ? 1.6 : -1.6), sy - 12 + j * 2.4, 1.6, 1, j % 2 ? 0.6 : -0.6, 0, 7); c.fill(); } }
+  } else if (r === 'fish') {
+    for (const [dx, dy, f] of [[-4, -2, 1], [5, 4, -1]]) { const fx = x + dx, fy = y + dy; c.fillStyle = '#cfe8f5'; c.beginPath(); c.ellipse(fx, fy, 5, 2.4, 0, 0, 7); c.fill(); c.beginPath(); c.moveTo(fx - 5 * f, fy); c.lineTo(fx - 8 * f, fy - 3); c.lineTo(fx - 8 * f, fy + 3); c.fill(); c.fillStyle = '#123'; c.beginPath(); c.arc(fx + 3 * f, fy - 0.5, 0.7, 0, 7); c.fill(); }
+  } else if (r === 'horse') {
+    c.save(); c.translate(x, y); c.scale(0.9, 0.9);
+    c.fillStyle = '#00000035'; c.beginPath(); c.ellipse(1, 8, 9, 2.5, 0, 0, 7); c.fill();
+    c.fillStyle = '#8a5a32'; c.beginPath(); c.ellipse(0, 0, 7, 3.6, 0, 0, 7); c.fill();
+    c.beginPath(); c.moveTo(5, -1); c.lineTo(8, -7); c.lineTo(11, -6); c.lineTo(8, 0); c.fill();
+    c.strokeStyle = '#8a5a32'; c.lineWidth = 1.6; c.beginPath(); for (const lx of [-5, -2, 3, 5]) { c.moveTo(lx, 2); c.lineTo(lx, 8); } c.stroke();
+    c.strokeStyle = '#3b2412'; c.lineWidth = 1.4; c.beginPath(); c.moveTo(6, -4); c.lineTo(8.5, -8); c.moveTo(-7, -1); c.lineTo(-10, 3); c.stroke();
+    c.restore();
+  } else if (r === 'iron') rocks(c, x, y, s, '#6f7480', '#c9d6e6', i);
+  else if (r === 'copper') rocks(c, x, y, s, '#8a6a52', '#e0894a', i), rocks(c, x + 1, y + 1, 0.0001, '#000', null, i);
+  else if (r === 'coal') rocks(c, x, y, s, '#2b2b31', '#5d5d6a', i);
+  else if (r === 'gold') { rocks(c, x, y, s, '#7c6a4c', '#ffd54a', i); c.strokeStyle = '#fff6b0'; c.lineWidth = 1; c.beginPath(); c.moveTo(x + 6, y - 9); c.lineTo(x + 6, y - 5); c.moveTo(x + 4, y - 7); c.lineTo(x + 8, y - 7); c.stroke(); }
+  else if (r === 'stone') { for (const [dx, dy, w] of [[-6, 2, 7], [1, 2, 7], [-3, -3, 7]]) { c.fillStyle = '#9b958c'; c.fillRect(x + dx, y + dy, w, 4.5); c.fillStyle = '#c9c3b9'; c.fillRect(x + dx, y + dy, w, 1.4); c.strokeStyle = '#5f5a52'; c.lineWidth = 0.8; c.strokeRect(x + dx, y + dy, w, 4.5); } }
+  else if (r === 'saltpeter') { for (const [dx, dy, h] of [[-4, 4, 9], [0, 4, 12], [4, 4, 8], [-1.5, 6, 6]]) { c.fillStyle = '#f5f2e8'; c.beginPath(); c.moveTo(x + dx, y + dy - h); c.lineTo(x + dx + 2.2, y + dy); c.lineTo(x + dx - 2.2, y + dy); c.fill(); c.fillStyle = '#c9c2ad'; c.beginPath(); c.moveTo(x + dx, y + dy - h); c.lineTo(x + dx + 2.2, y + dy); c.lineTo(x + dx, y + dy); c.fill(); } }
+}
+const ORE_COL = { iron: '#a9b8cc', copper: '#e0894a', coal: '#2b2b31', gold: '#ffd54a', stone: '#b5aea3', saltpeter: '#f3efe2' };
+function drawImprovement(c, imp, cx, cy, i, r) {
+  if (imp === 'farm') {
+    c.save(); hexPath(c, cx, cy, HS - 3); c.clip();
+    const cols = ['#c9b045', '#8fae3e', '#d8c35c', '#9fbd4a'];
+    for (let k = 0; k < 4; k++) {
+      const ox = cx - 22 + (k % 2) * 22, oy = cy - 6 + Math.floor(k / 2) * 14, w = 20, h = 12;
+      c.fillStyle = cols[(k + (i % 3)) % 4]; c.save(); c.translate(ox + w / 2, oy + h / 2); c.rotate(-0.12); c.fillRect(-w / 2, -h / 2, w, h);
+      c.strokeStyle = '#00000025'; c.lineWidth = 1; for (let j = -h / 2 + 2; j < h / 2; j += 3) { c.beginPath(); c.moveTo(-w / 2, j); c.lineTo(w / 2, j); c.stroke(); }
+      c.strokeStyle = '#6b5a2e'; c.strokeRect(-w / 2, -h / 2, w, h); c.restore();
+    }
+    c.restore();
+  } else if (imp === 'pasture') {
+    c.strokeStyle = '#7a5530'; c.lineWidth = 1.6;
+    c.beginPath(); c.ellipse(cx - 2, cy + 4, 20, 12, 0, 0.15, Math.PI * 1.85); c.stroke();
+    c.beginPath(); c.ellipse(cx - 2, cy + 1, 20, 12, 0, 0.15, Math.PI * 1.85); c.stroke();
+    c.fillStyle = '#5c3e22'; for (let a = 0.2; a < Math.PI * 1.85; a += 0.55) c.fillRect(cx - 2 + Math.cos(a) * 20 - 1, cy + 1 + Math.sin(a) * 12 - 3, 2, 7);
+    c.fillStyle = '#8b3a2b'; c.beginPath(); c.moveTo(cx - 20, cy - 8); c.lineTo(cx - 14, cy - 14); c.lineTo(cx - 8, cy - 8); c.fill(); c.fillStyle = '#b07a4a'; c.fillRect(cx - 19, cy - 8, 10, 7);
+  } else if (imp === 'lumber') {
+    for (const [dx, dy] of [[-14, 6], [-6, 12], [10, 10]]) { c.fillStyle = '#6b4a2a'; c.beginPath(); c.ellipse(cx + dx, cy + dy, 3.5, 2, 0, 0, 7); c.fill(); c.fillStyle = '#d9b07a'; c.beginPath(); c.ellipse(cx + dx, cy + dy - 1.2, 3.5, 1.6, 0, 0, 7); c.fill(); }
+    for (let k = 0; k < 3; k++) { c.fillStyle = '#8a5a32'; c.fillRect(cx - 4, cy - 2 - k * 3.5 + (k === 2 ? 0 : 0), 16 - k * 2, 3.2); c.fillStyle = '#e0bb85'; c.beginPath(); c.arc(cx - 4, cy - 0.4 - k * 3.5, 1.6, 0, 7); c.fill(); }
+    c.fillStyle = '#5c3e22'; c.fillRect(cx - 18, cy - 12, 10, 7); c.fillStyle = '#7d3a28'; c.beginPath(); c.moveTo(cx - 20, cy - 12); c.lineTo(cx - 13, cy - 17); c.lineTo(cx - 6, cy - 12); c.fill();
+  } else if (imp === 'mine') {
+    const x = cx - 10, y = cy + 2;
+    c.fillStyle = '#5b4a36'; c.beginPath(); c.moveTo(x - 11, y + 8); c.quadraticCurveTo(x, y - 14, x + 11, y + 8); c.fill();
+    c.fillStyle = '#120d08'; c.beginPath(); c.moveTo(x - 6, y + 8); c.lineTo(x - 6, y - 1); c.quadraticCurveTo(x, y - 7, x + 6, y - 1); c.lineTo(x + 6, y + 8); c.fill();
+    c.strokeStyle = '#a77a45'; c.lineWidth = 2; c.beginPath(); c.moveTo(x - 6, y + 8); c.lineTo(x - 6, y - 2); c.lineTo(x + 6, y - 2); c.lineTo(x + 6, y + 8); c.stroke();
+    c.strokeStyle = '#6b6b6b'; c.lineWidth = 1; c.beginPath(); c.moveTo(x + 6, y + 9); c.lineTo(x + 22, y + 9); c.moveTo(x + 6, y + 11); c.lineTo(x + 22, y + 11); c.stroke();
+    const ore = ORE_COL[r] || '#8e8676';
+    c.fillStyle = '#3a3a40'; c.fillRect(x + 12, y + 3, 9, 5); c.fillStyle = ore; c.beginPath(); c.arc(x + 14, y + 3, 2, 0, 7); c.arc(x + 17.5, y + 2.5, 2.2, 0, 7); c.arc(x + 19, y + 3.5, 1.6, 0, 7); c.fill();
+    c.fillStyle = '#222'; c.beginPath(); c.arc(x + 14, y + 8.5, 1.4, 0, 7); c.arc(x + 19, y + 8.5, 1.4, 0, 7); c.fill();
+  }
 }
 function buildOverlay() {
   const c = overCv.getContext('2d');
@@ -172,11 +271,13 @@ function buildOverlay() {
   for (let i = 0; i < N; i++) {
     if (fog.charCodeAt(i) === 48) continue;
     const [cx, cy] = center(i);
-    if (own[i] >= 0) { hexPath(c, cx, cy, HS); c.fillStyle = pcolor(own[i]) + '24'; c.fill(); }
-    const im = IMP[i];
-    if (im && im !== '.') badgeIcon(c, R.IMP_BY_CODE[im], cx - 13, cy + 13, '#f5f0e0', 11);
+    if (own[i] >= 0) { hexPath(c, cx, cy, HS); c.fillStyle = pcolor(own[i]) + '1f'; c.fill(); }
+    if (cityAt.has(i)) continue;
+    const im = IMP[i] && IMP[i] !== '.' ? R.IMP_BY_CODE[IMP[i]] : null;
     const r = MAP.res[i];
-    if (r) badgeIcon(c, r, cx + 13, cy + 13, RES_COLOR[r] || '#fff', 11);
+    if (im === 'farm') drawImprovement(c, im, cx, cy, i, r);
+    if (r && !(im === 'mine' && r !== 'gold' && r !== 'stone' && false)) drawResource(c, r, cx + 11, cy + (im === 'mine' ? -8 : 6), i);
+    if (im && im !== 'farm') drawImprovement(c, im, cx, cy, i, r);
   }
   for (let i = 0; i < N; i++) {
     const o = own[i]; if (o < 0 || fog.charCodeAt(i) === 48) continue;
@@ -184,24 +285,21 @@ function buildOverlay() {
     for (let d = 0; d < 6; d++) {
       const n = nbDir(i, d);
       if (n >= 0 && own[n] === o) continue;
-      const k = DIR_CORNER[d], [x1, y1] = corner(cx, cy, k, HS - 2.5), [x2, y2] = corner(cx, cy, (k + 1) % 6, HS - 2.5);
-      c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.strokeStyle = pcolor(o); c.lineWidth = 3.2; c.stroke();
+      const [[x1, y1], [x2, y2]] = edgeSeg(cx, cy, d, 2.5);
+      c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.strokeStyle = '#000000a0'; c.lineWidth = 5; c.stroke();
+      c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.strokeStyle = pcolor(o); c.lineWidth = 3; c.stroke();
     }
   }
   for (let i = 0; i < N; i++) {
     const f = fog.charCodeAt(i) - 48; if (f === 2) continue;
     const [cx, cy] = center(i);
-    hexPath(c, cx, cy, HS + 0.8); c.fillStyle = f === 0 ? '#05070d' : '#05070d88'; c.fill();
+    hexPath(c, cx, cy, HS + 1.6); c.fillStyle = f === 0 ? '#05070d' : '#05070d80'; c.fill();
   }
   const m = miniBase.getContext('2d'), img = m.createImageData(miniBase.width, miniBase.height);
   for (let i = 0; i < N; i++) {
     const x = i % MAP.W, y = (i / MAP.W) | 0, f = fog.charCodeAt(i) - 48;
     let col = [5, 7, 13];
-    if (f > 0) {
-      const hex = own[i] >= 0 ? pcolor(own[i]) : R.TERRAIN[MAP.terr[i]].color;
-      const n = parseInt(hex.slice(1), 16); col = [n >> 16, (n >> 8) & 255, n & 255];
-      if (f === 1) col = col.map(v => v * 0.55);
-    }
+    if (f > 0) { const hex = own[i] >= 0 ? pcolor(own[i]) : R.TERRAIN[MAP.terr[i]].color; const n = parseInt(hex.slice(1), 16); col = [n >> 16, (n >> 8) & 255, n & 255]; if (f === 1) col = col.map(v => v * 0.55); }
     const ox = x * 2 + (y & 1);
     for (const [dx, dy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) { const k = ((y * 2 + dy) * miniBase.width + ox + dx) * 4; img.data[k] = col[0]; img.data[k + 1] = col[1]; img.data[k + 2] = col[2]; img.data[k + 3] = 255; }
   }
@@ -209,12 +307,18 @@ function buildOverlay() {
 }
 function unitToken(c, type, owner, x, y, r, opts) {
   const U = R.UNITS[type], col = pcolor(owner), o = opts || {};
+  c.save();
+  c.shadowColor = '#000000a0'; c.shadowBlur = 6; c.shadowOffsetY = 2;
+  const g = c.createRadialGradient(x - r * 0.4, y - r * 0.5, r * 0.1, x, y, r * 1.1); g.addColorStop(0, shade(col, 1.25)); g.addColorStop(1, shade(col, 0.72));
   c.beginPath();
   if (U.civ) { if (c.roundRect) c.roundRect(x - r, y - r, r * 2, r * 2, r * 0.35); else c.rect(x - r, y - r, r * 2, r * 2); }
   else c.arc(x, y, r, 0, Math.PI * 2);
-  c.fillStyle = col; c.fill();
-  c.lineWidth = o.sel ? 3.5 : 2; c.strokeStyle = o.sel ? '#ffe14a' : o.war ? '#ff4d4d' : '#0b0f1a'; c.stroke();
-  IC.draw(c, type, x, y, r * 1.25, lum(col) > 0.6 ? '#141414' : '#ffffff', 2.4);
+  c.fillStyle = g; c.fill(); c.restore();
+  c.beginPath();
+  if (U.civ) { if (c.roundRect) c.roundRect(x - r, y - r, r * 2, r * 2, r * 0.35); else c.rect(x - r, y - r, r * 2, r * 2); } else c.arc(x, y, r, 0, Math.PI * 2);
+  c.lineWidth = o.sel ? 3.5 : 2; c.strokeStyle = o.sel ? '#ffe14a' : o.war ? '#ff4d4d' : '#0b0f1acc'; c.stroke();
+  c.beginPath(); if (!U.civ) c.arc(x, y, r - 2.5, 0, 7); else if (c.roundRect) c.roundRect(x - r + 2.5, y - r + 2.5, r * 2 - 5, r * 2 - 5, r * 0.3); c.strokeStyle = '#ffffff40'; c.lineWidth = 1; c.stroke();
+  IC.draw(c, type, x, y, r * 1.2, lum(col) > 0.6 ? '#141414' : '#ffffff', 2.4);
 }
 function drawStack(i, us) {
   const [cx, cy] = center(i), inCity = cityAt.has(i);
@@ -227,15 +331,15 @@ function drawStack(i, us) {
     const civ = list.filter(u => R.UNITS[u.t].civ);
     const main = mil[0] || civ[0];
     const ox = owners.length > 1 ? (k ? 12 : -12) : 0;
-    const r = inCity ? HS * 0.34 : HS * 0.48;
-    const x = cx + ox + (inCity ? HS * 0.3 : 0), y = cy + (inCity ? HS * 0.42 : 0);
+    const r = inCity ? HS * 0.32 : HS * 0.46;
+    const x = cx + ox + (inCity ? HS * 0.42 : 0), y = cy + (inCity ? HS * 0.5 : -2);
     const selected = sel && sel.kind === 'stack' && sel.tile === i && o === me;
     const war = o !== me && P(o) && P(o).d === 'war';
     if (list.length > 1) unitToken(ctx, main.t, o, x + 3, y - 3, r, { war });
     unitToken(ctx, main.t, o, x, y, r, { sel: selected, war });
     if (mil.length && civ.length) unitToken(ctx, civ[0].t, o, x - r * 0.95, y + r * 0.55, r * 0.5, {});
     const avgHp = list.reduce((s, u) => s + u.hp, 0) / list.length;
-    if (avgHp < 100) { ctx.fillStyle = '#000a'; ctx.fillRect(x - r, y + r + 2, r * 2, 4); ctx.fillStyle = hpCol(avgHp); ctx.fillRect(x - r, y + r + 2, r * 2 * avgHp / 100, 4); }
+    if (avgHp < R.HPMAX) { ctx.fillStyle = '#000a'; ctx.fillRect(x - r, y + r + 2, r * 2, 4); ctx.fillStyle = hpCol(avgHp); ctx.fillRect(x - r, y + r + 2, r * 2 * avgHp / R.HPMAX, 4); }
     if (list.length > 1) {
       const t = String(list.length); ctx.font = 'bold 11px system-ui'; const w = Math.max(16, ctx.measureText(t).width + 8);
       ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(x + r * 0.45, y - r - 4, w, 15, 7); else ctx.rect(x + r * 0.45, y - r - 4, w, 15);
@@ -243,27 +347,59 @@ function drawStack(i, us) {
       ctx.fillStyle = '#f0c35a'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(t, x + r * 0.45 + w / 2, y - r + 3.5);
     }
     if (o === me) {
-      const idle = list.some(u => u.mv > 0 && !u.f && !u.s && !u.w);
+      const idle = list.some(u => u.mv > 0 && !u.f && !u.s && !u.w && !u.mi);
       if (idle) { ctx.beginPath(); ctx.arc(x - r * 0.8, y - r * 0.8, 3.8, 0, 7); ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = '#000'; ctx.lineWidth = 1; ctx.stroke(); }
       else if (list.every(u => u.f || !R.UNITS[u.t].str)) IC.draw(ctx, 'shield', x - r * 0.8, y - r * 0.8, 10, '#93c5fd', 2.6);
-      if (list.some(u => u.w)) IC.draw(ctx, 'hammer', x + r * 0.9, y + r * 0.6, 10, '#facc15', 2.6);
     }
+    if (list.some(u => u.w)) IC.draw(ctx, 'hammer', x + r * 0.9, y + r * 0.6, 10, '#facc15', 2.6);
+    if (list.some(u => u.mi)) IC.draw(ctx, 'mine', x + r * 0.9, y + r * 0.6, 10, '#fdba74', 2.6);
     if (list.some(u => u.b)) IC.draw(ctx, 'swords', x, y - r - 12, 14, '#ff6b6b', 2.6);
   });
 }
+// 도시: 인구에 따라 집이 늘어나고, 성벽·궁전·건물이 보임
+function house(c, x, y, s, roof, wall) {
+  c.fillStyle = '#00000040'; c.fillRect(x - s * 0.5 + 1.5, y + 1.5, s, s * 0.6);
+  c.fillStyle = wall; c.fillRect(x - s * 0.5, y - s * 0.1, s, s * 0.65);
+  c.fillStyle = roof; c.beginPath(); c.moveTo(x - s * 0.62, y - s * 0.05); c.lineTo(x, y - s * 0.6); c.lineTo(x + s * 0.62, y - s * 0.05); c.fill();
+  c.fillStyle = '#3a2a1a'; c.fillRect(x - s * 0.1, y + s * 0.22, s * 0.2, s * 0.33);
+}
 function drawCity(c) {
   const [cx, cy] = center(c.p), col = pcolor(c.o), war = c.o !== me && P(c.o) && P(c.o).d === 'war';
-  const s = HS * 0.62;
-  ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(cx - s, cy - s - 2, s * 2, s * 2, 8); else ctx.rect(cx - s, cy - s - 2, s * 2, s * 2);
-  ctx.fillStyle = '#0d1322e8'; ctx.fill(); ctx.lineWidth = 2.5; ctx.strokeStyle = col; ctx.stroke();
-  IC.draw(ctx, 'city', cx, cy - 2, s * 1.35, col, 2.4);
-  if (c.cap) IC.draw(ctx, 'star', cx + s - 2, cy - s, 11, '#f0c35a', 2.6);
+  const b = c.b || [], has = k => b.includes(k);
+  const era = b.some(k => ['factory', 'power_plant', 'research_lab', 'broadcast', 'launchpad'].includes(k)) ? 2 : b.some(k => ['university', 'bank', 'opera', 'stock_exchange', 'printing_house'].includes(k)) ? 1 : 0;
+  const R0 = HS * 0.82;
+  const gg = ctx.createRadialGradient(cx, cy, 2, cx, cy, R0); gg.addColorStop(0, era === 2 ? '#8d8a85' : '#a8916b'); gg.addColorStop(1, era === 2 ? '#5d5b58' : '#6e5a3e');
+  ctx.beginPath(); ctx.ellipse(cx, cy + 2, R0, R0 * 0.78, 0, 0, 7); ctx.fillStyle = gg; ctx.fill();
+  if (has('walls') || has('castle')) {
+    ctx.beginPath(); ctx.ellipse(cx, cy + 2, R0, R0 * 0.78, 0, 0, 7); ctx.strokeStyle = '#8c857a'; ctx.lineWidth = has('castle') ? 5 : 3.5; ctx.stroke();
+    ctx.strokeStyle = '#5c564d'; ctx.lineWidth = 1; ctx.stroke();
+    if (has('castle')) for (let a = 0; a < 4; a++) { const tx = cx + Math.cos(a * Math.PI / 2 + 0.78) * R0, ty = cy + 2 + Math.sin(a * Math.PI / 2 + 0.78) * R0 * 0.78; ctx.fillStyle = '#9b948a'; ctx.fillRect(tx - 3.5, ty - 7, 7, 9); ctx.fillStyle = shade(col, 0.8); ctx.fillRect(tx - 4, ty - 9, 8, 2.5); }
+  }
+  const n = Math.min(4 + c.pop, 16), roof = shade(col, 0.78), wall = era === 2 ? '#d7d9dc' : '#eadcc0';
+  const spots = [];
+  for (let k = 0; k < n; k++) { const a = k * 2.399 + c.id, rr = 6 + 3.1 * Math.sqrt(k + 1); spots.push([cx + Math.cos(a) * rr * 0.95, cy + 3 + Math.sin(a) * rr * 0.68]); }
+  spots.sort((a, b2) => a[1] - b2[1]);
+  for (const [x, y] of spots) { if (Math.hypot(x - cx, (y - cy) * 1.3) < 7) continue; if (era === 2 && hash(x | 0, y | 0) < 0.4) { ctx.fillStyle = '#00000040'; ctx.fillRect(x - 2, y - 7, 6, 12); ctx.fillStyle = '#b8bec8'; ctx.fillRect(x - 3, y - 9, 6, 12); ctx.fillStyle = '#6b7f99'; for (let j = 0; j < 3; j++) ctx.fillRect(x - 2, y - 7 + j * 3.5, 4, 1.5); } else house(ctx, x, y, 6.5, roof, wall); }
+  // 중심 건물
+  if (c.cap) { ctx.fillStyle = '#efe3c8'; ctx.fillRect(cx - 7, cy - 4, 14, 9); ctx.fillStyle = col; ctx.beginPath(); ctx.arc(cx, cy - 4, 5.5, Math.PI, 0); ctx.fill(); ctx.strokeStyle = '#3a2a1a'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(cx, cy - 9.5); ctx.lineTo(cx, cy - 16); ctx.stroke(); ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(cx, cy - 16); ctx.lineTo(cx + 6, cy - 14); ctx.lineTo(cx, cy - 12); ctx.fill(); }
+  else house(ctx, cx, cy, 9, shade(col, 0.6), '#f1e6cf');
+  // 대표 건물
+  const marks = [];
+  if (has('temple') || has('cathedral')) marks.push(x => { ctx.fillStyle = '#f3f0e6'; ctx.fillRect(x - 5, cy - 1 - 14, 10, 7); ctx.fillStyle = '#d9d2c0'; ctx.beginPath(); ctx.moveTo(x - 6, cy - 15); ctx.lineTo(x, cy - 20); ctx.lineTo(x + 6, cy - 15); ctx.fill(); });
+  if (has('university') || has('observatory')) marks.push(x => { ctx.fillStyle = '#e6e8ee'; ctx.fillRect(x - 4, cy - 13, 8, 6); ctx.fillStyle = '#7fa6d9'; ctx.beginPath(); ctx.arc(x, cy - 13, 4, Math.PI, 0); ctx.fill(); });
+  if (has('factory') || has('power_plant')) marks.push(x => { ctx.fillStyle = '#6b6f78'; ctx.fillRect(x - 5, cy - 12, 10, 6); ctx.fillStyle = '#4b4f57'; ctx.fillRect(x + 1, cy - 20, 3, 8); ctx.fillStyle = '#cfd4dc88'; ctx.beginPath(); ctx.arc(x + 3, cy - 23, 3, 0, 7); ctx.arc(x + 6, cy - 26, 2.4, 0, 7); ctx.fill(); });
+  if (has('launchpad')) marks.push(x => { ctx.fillStyle = '#f2f4f7'; ctx.beginPath(); ctx.moveTo(x, cy - 24); ctx.lineTo(x + 3, cy - 18); ctx.lineTo(x + 3, cy - 8); ctx.lineTo(x - 3, cy - 8); ctx.lineTo(x - 3, cy - 18); ctx.fill(); ctx.fillStyle = '#ef5350'; ctx.fillRect(x - 3, cy - 10, 6, 2); });
+  marks.slice(0, 3).forEach((fn, k) => fn(cx + (k - (Math.min(3, marks.length) - 1) / 2) * 13));
   const label = `${c.pop}  ${c.name}`;
   ctx.font = '600 12px system-ui,sans-serif';
   const w = ctx.measureText(label).width + 16, by = cy - HS * 1.12;
+  ctx.save(); ctx.shadowColor = '#0009'; ctx.shadowBlur = 4;
   ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(cx - w / 2, by - 9, w, 18, 9); else ctx.rect(cx - w / 2, by - 9, w, 18);
-  ctx.fillStyle = col; ctx.fill(); ctx.strokeStyle = war ? '#ff3b3b' : '#000b'; ctx.lineWidth = war ? 2 : 1.2; ctx.stroke();
+  ctx.fillStyle = col; ctx.fill(); ctx.restore();
+  ctx.beginPath(); if (ctx.roundRect) ctx.roundRect(cx - w / 2, by - 9, w, 18, 9); else ctx.rect(cx - w / 2, by - 9, w, 18);
+  ctx.strokeStyle = war ? '#ff3b3b' : '#000b'; ctx.lineWidth = war ? 2 : 1.2; ctx.stroke();
   ctx.fillStyle = lum(col) > 0.6 ? '#111' : '#fff'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(label, cx, by + 1);
+  if (c.cap) IC.draw(ctx, 'star', cx - w / 2 - 6, by, 11, '#f0c35a', 2.6);
   if (c.o !== me && cam.z > 0.6) { ctx.font = '10.5px system-ui'; ctx.lineWidth = 3; ctx.strokeStyle = '#000'; const t = pname(c.o); ctx.strokeText(t, cx, by - 15); ctx.fillStyle = '#fff'; ctx.fillText(t, cx, by - 15); }
   if (c.hp < c.mhp) { const bw = 44; ctx.fillStyle = '#000b'; ctx.fillRect(cx - bw / 2, by + 11, bw, 5); ctx.fillStyle = '#ef5350'; ctx.fillRect(cx - bw / 2, by + 11, bw * c.hp / c.mhp, 5); }
   if (sel && sel.kind === 'city' && sel.id === c.id) { hexPath(ctx, cx, cy, HS - 2); ctx.strokeStyle = '#ffe14a'; ctx.lineWidth = 3; ctx.stroke(); }
@@ -397,6 +533,11 @@ function canStand(i) {
   const us = unitsAt.get(i); if (us && !us.every(x => friendly(x.o))) return false;
   return canEnterLand(OWNER[i] == null ? -1 : OWNER[i]);
 }
+function workerSlotOk(i, self) {
+  if (!MAP.res[i] && !(IMP[i] && IMP[i] !== '.')) return true;
+  if (cityAt.has(i)) return true;
+  return (unitsAt.get(i) || []).filter(x => x !== self && R.UNITS[x.t].worker).length < 3;
+}
 function myUnitsAt(i) { return (unitsAt.get(i) || []).filter(u => u.o === me).sort((a, b) => (R.UNITS[a.t].civ ? 1 : 0) - (R.UNITS[b.t].civ ? 1 : 0) || (R.UNITS[b.t].str + (R.UNITS[b.t].rstr || 0)) - (R.UNITS[a.t].str + (R.UNITS[a.t].rstr || 0))); }
 function pickedUnits() { if (!sel || sel.kind !== 'stack') return []; return [...sel.picked].map(id => unitById.get(id)).filter(u => u && u.o === me && u.p === sel.tile); }
 function computeSel() {
@@ -410,7 +551,8 @@ function computeSel() {
     const movers = pickedUnits().filter(u => u.mv > 0 && !u.b && !u.w);
     let first = true;
     for (const u of movers) {
-      const r = R.reach(MAP.W, MAP.H, MAP.terr, u.p, u.mv, canStand, canStand);
+      const end = R.UNITS[u.t].worker ? (i => canStand(i) && workerSlotOk(i, u)) : canStand;
+      const r = R.reach(MAP.W, MAP.H, MAP.terr, u.p, u.mv, canStand, end);
       if (first) { reachMap = r; first = false; }
       else { const nm = new Map(); for (const [k, v] of reachMap) if (r.has(k)) nm.set(k, Math.min(v, r.get(k))); reachMap = nm; }
     }
@@ -474,7 +616,7 @@ function tapTile(i, right) {
   else if (next === 'city') select({ kind: 'city', id: c.id });
   else select({ kind: 'foreign', tile: i });
 }
-function waiting() { return S && S.my.alive ? S.units.filter(u => u.o === me && u.mv > 0 && !u.f && !u.s && !u.w && !u.b) : []; }
+function waiting() { return S && S.my.alive ? S.units.filter(u => u.o === me && u.mv > 0 && !u.f && !u.s && !u.w && !u.b && !u.mi) : []; }
 function selectNext() {
   const w = waiting(); if (!w.length) { select(null); return false; }
   let k = 0;
@@ -520,6 +662,7 @@ function onState(m) {
   if ($('#mTech').classList.contains('on')) renderTech();
   if ($('#mDip').classList.contains('on')) renderDip();
   if ($('#mIdeo').classList.contains('on')) renderIdeo();
+  if ($('#mNation').classList.contains('on')) renderNation();
   if ($('#mMarket').classList.contains('on')) renderMarket();
   if ($('#mRank').classList.contains('on')) renderRank();
   if (!S.my.alive && !deadShown) { deadShown = true; $('#mDead').classList.add('on'); }
@@ -531,7 +674,7 @@ function onState(m) {
 function renderNav() {
   const inc = S ? (S.props || []).filter(p => p.to === me).length : 0;
   const canPol = S && S.my.alive && !S.my.anarchy && S.my.culture >= S.my.pcost && Object.values(R.POLICY_TREES).some(t => (!t.tech || S.my.techs.includes(t.tech)) && t.policies.some(x => !S.my.policies.includes(x.id))) ? '!' : 0;
-  const nav = [['bTech', 'tech', '기술'], ['bIdeo', 'ideology', '사상', canPol], ['bDip', 'handshake', '외교', inc], ['bMarket', 'scale', '시장'], ['bRank', 'crown', '순위'], ['bChat', 'chat', '채팅', chatUnread], ['bMenu', 'menu', '']];
+  const nav = [['bTech', 'tech', '기술'], ['bIdeo', 'ideology', '사상', canPol], ['bNation', 'stab', '국정', S && S.my.stab < 40 ? '!' : 0], ['bDip', 'handshake', '외교', inc], ['bMarket', 'scale', '시장'], ['bRank', 'crown', '순위'], ['bChat', 'chat', '채팅', chatUnread], ['bMenu', 'menu', '']];
   for (const [id, icon, label, badge] of nav) $('#' + id).innerHTML = `${ic(icon, 18)}${label ? `<span class="lbl">${label}</span>` : ''}${badge ? `<span class="badge">${badge}</span>` : ''}`;
   $('#bStock').innerHTML = `${ic('box', 18)}`;
   $('#bStock').style.display = innerWidth < 760 ? '' : 'none';
@@ -543,6 +686,8 @@ function renderHud() {
   $('#hGold').innerHTML = `<span style="color:var(--gold)">${ic('coin', 15)}</span> ${my.gold} <small class="${my.gpt >= 0 ? 'pos' : 'neg'}">${my.gpt >= 0 ? '+' : ''}${my.gpt}</small>`;
   $('#hSci').innerHTML = `<span style="color:var(--blue)">${ic('flask', 15)}</span> <small class="pos">+${my.spt}</small>`;
   $('#hRes').innerHTML = my.res ? `${ic('tech', 15)} ${R.TECHS[my.res].name} <small>${Math.min(my.sci, my.rcost)}/${my.rcost}</small>` : `<span class="neg">${ic('tech', 15)} 연구 선택</span>`;
+  const st = my.stab == null ? 70 : my.stab, stCol = st >= 60 ? 'var(--green)' : st >= 40 ? 'var(--gold)' : 'var(--red)';
+  $('#hStab').innerHTML = `<span style="color:${stCol}">${ic(st < 40 ? 'unrest' : 'stab', 15)}</span> ${st}<small>${my.stabT > st ? ' ↑' : my.stabT < st ? ' ↓' : ''}</small>`;
   $('#hCul').innerHTML = my.anarchy ? `<span class="neg">${ic('gov', 15)} 무정부 ~${my.anarchy}턴</span>` : `<span style="color:#f0abfc">${ic('culture', 15)}</span> ${my.culture}/${my.pcost} <small class="pos">+${my.cpt}</small>`;
   const humansOn = S.players.filter(q => !q.removed && !q.ai && q.online);
   $('#hOnline').innerHTML = `${ic('users', 15)} ${humansOn.length} <small>준비 ${humansOn.filter(q => q.ready).length}</small>`;
@@ -627,10 +772,10 @@ function stackPanel() {
     h += `<div class="row" style="margin-bottom:6px"><span class="mut" style="font-size:12px">체크한 유닛이 함께 이동·공격합니다</span><div class="sp"></div><button class="sm" data-act="pickall">${allPicked ? '전체 해제' : '전체 선택'}</button><button class="sm" data-act="gfort">${ic('shield', 13)} 부대 요새화</button></div>`;
     h += '<div class="ulist">' + mine.map(u => {
       const st = unitStats(u), U = st.U, col = pcolor(me);
-      const status = u.b ? '전투 중' : u.w ? `${R.IMPS[u.w.imp].name} 건설 ${u.w.left}턴` : u.f ? '요새화' : u.s ? '대기' : u.mv > 0 ? `이동 ${u.mv}/${u.mm}` : '행동 완료';
+      const status = u.b ? '전투 중' : u.mi ? '상주 채굴 중' : u.w ? `${R.IMPS[u.w.imp].name} 건설 ${u.w.left}턴` : u.f ? '요새화' : u.s ? '대기' : u.mv > 0 ? `이동 ${u.mv}/${u.mm}` : '행동 완료';
       return `<div class="urow ${u.id === f.id ? 'focus' : ''}" data-focus="${u.id}"><input type="checkbox" data-pick="${u.id}" ${sel.picked.has(u.id) ? 'checked' : ''}>
         <span class="tk ${U.civ ? 'civ' : ''}" style="background:${col};color:${lum(col) > 0.6 ? '#111' : '#fff'}">${ic(u.t, 16)}</span>
-        <span class="nm"><b>${U.name}${u.v ? ' ' + ic('star', 11) : ''}</b><small>${status}${U.str ? ` · 공 ${st.atk} 방 ${st.def}` : ''}</small>${bar(u.hp, 100, hpCol(u.hp))}</span></div>`;
+        <span class="nm"><b>${U.name}${u.v ? ' ' + ic('star', 11) : ''}</b><small>${status}${U.str ? ` · 공 ${st.atk} 방 ${st.def}` : ''}</small>${bar(u.hp, R.HPMAX, hpCol(u.hp))}</span></div>`;
     }).join('') + '</div><div class="sec">선택한 유닛</div>';
   }
   h += unitDetail(f);
@@ -639,8 +784,8 @@ function stackPanel() {
 }
 function unitDetail(u) {
   const st = unitStats(u), U = st.U;
-  let h = `<div class="kv"><div>${ic('heart', 14)}<b>${u.hp}</b></div><div>${ic('boot', 14)}<b>${u.mv}/${u.mm}</b></div>${U.str ? `<div>${ic(U.rstr ? 'archer' : 'atk', 14)}<b>${st.atk}</b></div><div>${ic('shield', 14)}<b>${st.def}</b></div>` : `<div class="dim">민간</div><div class="dim">—</div>`}</div>`;
-  if (U.desc) h += `<div class="mut" style="font-size:12px;margin-top:6px">${U.desc}${U.range ? ` · 사거리 ${U.range}` : ''}</div>`;
+  let h = `<div class="kv"><div>${ic('heart', 14)}<b>${u.hp}/${R.HPMAX}</b></div><div>${ic('boot', 14)}<b>${u.mv}/${u.mm}</b></div>${U.str ? `<div>${ic(U.rstr ? 'archer' : 'atk', 14)}<b>${st.atk}</b></div><div>${ic('shield', 14)}<b>${st.def}</b></div>` : `<div class="dim">민간</div><div class="dim">—</div>`}</div>`;
+  if (U.desc) h += `<div class="mut" style="font-size:12px;margin-top:6px">${U.desc}${U.range ? ` · 사거리 ${U.range}` : ''}${U.worker ? ' · 자원·시설 칸에는 일꾼이 최대 3명까지 들어갈 수 있고, 여럿이 함께 지으면 빨리 완성돼요' : ''}</div>`;
   h += `<div style="margin-top:8px;font-size:13px">${tileDesc(u.p, true)}</div>`;
   const acts = [];
   const owner = OWNER[u.p];
@@ -656,6 +801,8 @@ function unitDetail(u) {
     }
     const r = MAP.res[u.p], t = MAP.terr[u.p];
     const hv = r && R.RES[r].stock ? R.STOCK[R.RES[r].stock].name : r === 'gold' ? '금 4' : t === 'forest' ? '목재' : t === 'hills' ? '석재' : null;
+    const imC = IMP[u.p] && IMP[u.p] !== '.' ? R.IMP_BY_CODE[IMP[u.p]] : null;
+    if (imC && imC !== 'farm' && owner === me) { const crew = (unitsAt.get(u.p) || []).filter(x => R.UNITS[x.t].worker && x.mi).length; acts.push(`<button class="wide ${u.mi ? 'on' : ''}" data-act="mine">${ic('mine', 15)} ${u.mi ? '상주 채굴 중단' : '상주 채굴 (매 턴 +1)'} <span class="mut" style="font-size:11px">이 칸 일꾼 ${(unitsAt.get(u.p) || []).filter(x => R.UNITS[x.t].worker).length}/3 · 채굴 ${crew}</span></button>`); }
     if (hv) acts.push(`<button data-act="harvest" ${u.mv > 0 && !u.h && (owner < 0 || owner === me) ? '' : 'disabled'}>${ic('harvest', 15)} 채집: ${hv}</button>`);
   }
   if (!U.civ) {
@@ -694,7 +841,7 @@ function foreignPanel() {
   let h = panelHead(us[0].t, pcolor(o), `${esc(pname(o))}의 부대`, `${us.length}개 유닛 · ${R.TERRAIN[MAP.terr[sel.tile]].name}`);
   h += `<div class="pb"><div class="row">${relTags(o)}</div><div class="ulist" style="margin-top:8px">` + us.map(u => {
     const st = unitStats(u), col = pcolor(u.o);
-    return `<div class="urow" style="cursor:default"><span class="tk ${st.U.civ ? 'civ' : ''}" style="background:${col};color:${lum(col) > 0.6 ? '#111' : '#fff'}">${ic(u.t, 16)}</span><span class="nm"><b>${st.U.name}</b><small>${st.U.str ? `공 ${st.atk} 방 ${st.def}` : '민간'}${u.f ? ' · 요새화' : ''}${u.eq && Object.keys(u.eq).length ? ' · 장비 ' + Object.values(u.eq).map(k => R.EQUIP[k].name).join(', ') : ''}</small>${bar(u.hp, 100, hpCol(u.hp))}</span></div>`;
+    return `<div class="urow" style="cursor:default"><span class="tk ${st.U.civ ? 'civ' : ''}" style="background:${col};color:${lum(col) > 0.6 ? '#111' : '#fff'}">${ic(u.t, 16)}</span><span class="nm"><b>${st.U.name}</b><small>${st.U.str ? `공 ${st.atk} 방 ${st.def}` : '민간'}${u.f ? ' · 요새화' : ''}${u.eq && Object.keys(u.eq).length ? ' · 장비 ' + Object.values(u.eq).map(k => R.EQUIP[k].name).join(', ') : ''}</small>${bar(u.hp, R.HPMAX, hpCol(u.hp))}</span></div>`;
   }).join('') + `</div>${!isWar(o) ? `<div class="mut" style="font-size:12px;margin-top:8px">공격하려면 [외교]에서 선전포고가 필요합니다</div>` : ''}</div>`;
   return h;
 }
@@ -727,8 +874,14 @@ function cityPanel() {
   if (cityTab === 'prod') {
     h += '<div class="plist">' + R.availUnits(T).map(k => {
       const U = R.UNITS[k];
-      return `<button class="pitem ${isCur('unit', k)}" data-prod="unit" data-type="${k}">${ic(k, 20)}<span class="nm"><b>${U.name}</b><small>${U.str ? `공 ${U.rstr || U.str} · 방 ${U.str} · 이동 ${U.moves}` : U.desc}${U.res ? ' ' + resChips(U.res) : ''}</small></span><span class="cost">${ic('prod', 12)} ${cost(U.cost)}<br>${turns(U.cost)}턴</span></button>`;
+      return `<button class="pitem ${isCur('unit', k)}" data-prod="unit" data-type="${k}">${ic(k, 20)}<span class="nm"><b>${U.name}</b><small>${U.str ? `공 ${U.rstr || U.str} · 방 ${U.str} · 이동 ${U.moves}` : U.desc}${U.res ? ' ' + resChips(U.res) : ''}</small></span><span class="cost">${ic('prod', 12)} ${cost(U.cost * 0.5)}<br>${turns(U.cost * 0.5)}턴</span></button>`;
     }).join('') + '</div>';
+    if (c.b.includes('launchpad')) {
+      h += `<div class="sec">우주 프로젝트</div><div class="plist">` + Object.entries(R.PROJECTS).map(([k, Pj]) => {
+        const done = (S.my.space || {})[k] || 0, locked = !T[Pj.tech], full = done >= Pj.max || S.my.launched;
+        return `<button class="pitem ${isCur('project', k)}" data-prod="project" data-type="${k}" ${locked || full ? 'disabled' : ''}>${ic(k, 20)}<span class="nm"><b>${Pj.name} <span class="mut" style="font-weight:400">${done}/${Pj.max}</span></b><small>${locked ? R.TECHS[Pj.tech].name + ' 필요' : Pj.desc} ${resChips(Pj.res)}</small></span><span class="cost">${ic('prod', 12)} ${cost(Pj.cost)}<br>${turns(Pj.cost)}턴</span></button>`;
+      }).join('') + '</div>';
+    }
     h += `<div class="sec">기타</div><div class="plist">` + Object.entries(R.PROCESSES).map(([k, Pp]) => `<button class="pitem ${isCur('process', k)}" data-prod="process" data-type="${k}">${ic(k === 'wealth' ? 'coin' : 'flask', 20)}<span class="nm"><b>${Pp.name}</b><small>${Pp.desc}</small></span></button>`).join('') + '</div>';
   } else if (cityTab === 'equip') {
     const eq = R.availEquip(T);
@@ -743,6 +896,8 @@ function cityPanel() {
     if (c.b.length) h += `<div class="sec">건설됨</div><div class="row" style="gap:5px">${c.b.map(b => `<span class="chip" title="${R.BUILDINGS[b].desc}">${ic(b, 13)} ${R.BUILDINGS[b].name}</span>`).join('')}</div>`;
   } else {
     h += `<div class="mut" style="font-size:13px;line-height:1.8">식량 ${y.food} (인구 유지 -${y.upkeep})<br>생산 ${y.prod} · 금 ${y.gold} · 과학 ${y.sci}<br>방어력 ${c.str} · 체력 ${c.hp}/${c.mhp}<br>도시 안 유닛은 매 턴 체력 +25 회복</div>`;
+    const cc = Object.entries(S.corps || {}).filter(([, x]) => x.branches.some(br => br.id === c.id));
+    if (cc.length) h += `<div class="sec">기업</div>` + cc.map(([id, x]) => `<div class="chip" style="margin:2px 0">${ic(R.CORPS[id].icon, 13)} ${R.CORPS[id].name} ${x.hq === c.id ? '본사' : '지사'} · ${esc(pname(x.owner))} ${x.active ? '' : '<span class="neg">(중단)</span>'}</div>`).join('');
     const here = myUnitsAt(c.p);
     if (here.length) h += `<button style="width:100%;margin-top:8px" data-act="tostack">${ic('users', 15)} 주둔 부대 보기 (${here.length})</button>`;
   }
@@ -763,6 +918,7 @@ $('#panel').addEventListener('click', e => {
     if (a === 'found') { act('found', { unit: id }); autoNext = true; }
     else if (a === 'improve') { act('improve', { unit: id }); autoNext = true; }
     else if (a === 'harvest') { act('harvest', { unit: id }); autoNext = true; }
+    else if (a === 'mine') { act('mine', { unit: id }); autoNext = true; }
     else if (a === 'pillage') act('pillage', { unit: id });
     else if (a === 'fortify') { act('fortify', { unit: id }); autoNext = true; }
     else if (a === 'gfort') { act('fortify', { units: picked.map(u => u.id) }); autoNext = true; }
@@ -831,9 +987,10 @@ function renderIdeo() {
     for (const [tk, t] of Object.entries(R.POLICY_TREES)) {
       const locked = t.tech && !T[t.tech];
       const got = t.policies.filter(x => my.policies.includes(x.id)).length;
-      h += `<div class="ptree ${locked ? 'locked' : ''}"><h4>${ic(t.icon, 17)} ${t.name} <span class="mut" style="font-size:12px;font-weight:400">${got}/${t.policies.length}</span></h4><div class="mut" style="font-size:12px">${t.desc}${locked ? ` · ${ic('lock', 11)} ${R.TECHS[t.tech].name} 필요` : ''}</div>`;
+      const ideoBlocked = t.ideo && my.policies.some(id => R.POLICY_TREES[R.POLICY[id].tree].ideo && R.POLICY[id].tree !== tk);
+      h += `<div class="ptree ${locked ? 'locked' : ''}"><h4>${ic(t.icon, 17)} ${t.name} <span class="mut" style="font-size:12px;font-weight:400">${got}/${t.policies.length}</span></h4><div class="mut" style="font-size:12px">${t.desc}${locked ? ` · ${ic('lock', 11)} ${R.TECHS[t.tech].name} 필요` : ''}${ideoBlocked ? ' · <span class="neg">다른 이념을 선택함</span>' : ''}</div>`;
       t.policies.forEach((x, i) => {
-        const has = my.policies.includes(x.id), isNext = !has && !locked && (i === 0 || my.policies.includes(t.policies[i - 1].id));
+        const has = my.policies.includes(x.id), isNext = !has && !locked && !ideoBlocked && (i === 0 || my.policies.includes(t.policies[i - 1].id));
         const afford = isNext && my.culture >= my.pcost && !my.anarchy;
         h += `<button class="pol ${has ? 'got' : isNext ? 'next' : ''}" ${isNext ? `data-pol="${x.id}"` : 'disabled'} style="${isNext && !afford ? 'opacity:.75' : ''}">${has ? ic('check', 15, 'pos') : isNext ? ic('plus', 15, 'goldc') : ic('lock', 15, 'dim')}<span><span class="n">${x.name}</span><small>${R.modText(x.mods)}</small></span></button>`;
       });
@@ -868,6 +1025,70 @@ $('#ideoBody').onclick = e => {
 $('#bIdeo').onclick = () => openIdeo();
 $('#hCul').onclick = () => openIdeo();
 
+// ───────── 국정 (안정도·기업·우주·역사) ─────────
+let natTab = 'stab';
+function openNation(tab) { if (tab) natTab = tab; renderNation(); $('#mNation').classList.add('on'); }
+function renderNation() {
+  const my = S.my, T = techsObj();
+  $('#natTitle').innerHTML = `${ic('stab', 18)} 국정`;
+  $('#natTabs').innerHTML = [['stab', '안정도'], ['corp', '기업'], ['space', '우주'], ['hist', '세계 역사']].map(([k, n]) => `<button class="${natTab === k ? 'on' : ''}" data-ntab="${k}">${n}</button>`).join('');
+  let h = '';
+  if (natTab === 'stab') {
+    const st = my.stab, col = st >= 60 ? 'var(--green)' : st >= 40 ? 'var(--gold)' : 'var(--red)';
+    const risk = st >= 60 ? '안정 — 사건이 일어나지 않습니다' : st >= 40 ? '불안 — 정치 체제가 시대에 뒤처지면 혁명이 일어날 수 있습니다' : st >= 25 ? '위험 — 폭동·혁명·쿠데타가 일어날 수 있습니다' : '붕괴 직전 — 도시가 반란을 일으켜 독립할 수 있습니다';
+    const fest = S.turn - (my.festTurn || -99) >= 8;
+    h += `<div class="row" style="gap:16px;align-items:center"><div style="font-size:42px;font-weight:800;color:${col}">${st}</div><div style="flex:1"><div>목표 안정도 <b>${my.stabT}</b> <span class="mut">(매 턴 최대 4씩 변화)</span></div>${bar(st, 100, col)}<div class="mut" style="font-size:12px;margin-top:4px">${risk}</div></div></div>`;
+    h += `<div class="sec">구성 요소</div><table class="mtable">${(my.stabParts || []).map(([t, v]) => `<tr><td>${t}</td><td class="n ${v >= 0 ? 'pos' : 'neg'}">${v > 0 ? '+' : ''}${v}</td></tr>`).join('')}</table>`;
+    h += `<div class="row" style="margin-top:12px"><button class="pri" data-fest="1" ${fest && my.gold >= my.festCost ? '' : 'disabled'}>${ic('festival', 15)} 국가 축제 열기 (금 ${my.festCost})</button><span class="mut" style="font-size:12px">${fest ? '안정도가 일시적으로 +12 오릅니다' : `${my.festTurn + 8 - S.turn}턴 후 다시 열 수 있습니다`}</span></div>`;
+    h += `<div class="sec">사건 안내</div><div class="mut" style="font-size:12.5px;line-height:1.75">
+      ${ic('fist', 13)} <b>혁명</b> — 기술은 앞서 가는데 정부가 낡으면 민중이 새 체제(민주주의·공산주의 등)를 세웁니다. 무정부 3턴, 금 40% 손실<br>
+      ${ic('swords', 13)} <b>쿠데타</b> — 군부가 정권을 잡고 전제정·군주정으로 바꿉니다. 군대 20% 숙청, 금 30% 손실<br>
+      ${ic('flag', 13)} <b>반역(분리 독립)</b> — 수도에서 멀고 방어가 약한 도시가 새 나라로 독립해 전쟁을 겁니다<br>
+      ${ic('unrest', 13)} <b>폭동</b> — 도시 인구 감소, 생산 초기화<br>
+      안정도를 높이려면: 평화 유지, 문화 건물, 안정도 사상(전통·신앙·미학 등), 시대에 맞는 정부, 도시 주둔군, 기업 운영, 축제</div>`;
+  } else if (natTab === 'corp') {
+    h += `<div class="mut" style="font-size:12px;margin-bottom:10px">기업은 세계에 하나씩만 세울 수 있습니다. 본사를 세우면 매 턴 원료를 쓰고, 지사가 있는 도시에 효과를 주며, 지사 1곳당 금 +2(해외 지사는 +4)를 벌어요. 해외 진출에는 상대와 국경 개방·동맹·교역 협정 중 하나가 필요하고, 상대는 지사를 국유화할 수 있어요. 본사 도시를 점령하면 기업도 넘어갑니다.</div><div class="dl">`;
+    const myCities = S.cities.filter(c => c.o === me);
+    for (const [id, def] of Object.entries(R.CORPS)) {
+      const c = (S.corps || {})[id];
+      h += `<div class="prop"><div class="row"><b style="display:flex;align-items:center;gap:6px">${ic(def.icon, 17)} ${def.name}</b><span class="mut" style="font-size:12px">${def.desc}</span><div class="sp"></div>${c ? `<span class="tag ${c.owner === me ? 'on' : ''}">${esc(pname(c.owner))}${c.active ? '' : ' · 중단'}</span>` : `<span class="tag">${T[def.tech] ? '설립 가능' : R.TECHS[def.tech].name + ' 필요'}</span>`}</div>
+        <div class="row mut" style="font-size:12px;margin-top:4px;gap:10px"><span>지사 효과: <span class="pos">${Object.entries(def.eff).map(([k, v]) => ({ food: '식량', prod: '생산', gold: '금', sci: '과학', cul: '문화' })[k] + ' +' + v).join(', ')}</span></span><span>매 턴 원료: ${resChips(def.input)}</span></div>`;
+      if (!c && T[def.tech]) {
+        h += `<div class="row" style="margin-top:6px;gap:6px"><span class="mut" style="font-size:12px">설립 비용: 금 ${R.CORP_COST.found} ${resChips(def.found)}</span><div class="sp"></div><select data-corpcity="${id}">${myCities.map(x => `<option value="${x.id}">${esc(x.name)}</option>`).join('')}</select><button class="sm pri" data-found="${id}" ${my.gold >= R.CORP_COST.found ? '' : 'disabled'}>본사 설립</button></div>`;
+      } else if (c) {
+        h += `<div class="mut" style="font-size:12px;margin-top:4px">본사 ${esc(c.hqName)} · 지사 ${c.branches.length}곳${c.owner === me ? ` · 수익 +${c.income}/턴` : ''}</div><div class="row" style="gap:4px;margin-top:4px">${c.branches.map(br => `<span class="chip">${esc(br.name)}${br.o !== c.owner ? ' (해외)' : ''}${br.o === me && c.owner !== me && br.id !== c.hq ? ` <button class="sm ghost" data-nat="${id}:${br.id}" style="padding:0 4px">국유화</button>` : ''}</span>`).join('')}</div>`;
+        if (c.owner === me) {
+          const cand = S.cities.filter(x => !c.branches.some(br => br.id === x.id));
+          if (cand.length) h += `<div class="row" style="margin-top:6px;gap:6px"><select data-brcity="${id}">${cand.map(x => `<option value="${x.id}">${esc(x.name)}${x.o !== me ? ' · ' + esc(pname(x.o)) + ' (해외 ' + R.CORP_COST.foreign + '금)' : ' (' + R.CORP_COST.branch + '금)'}</option>`).join('')}</select><button class="sm" data-branch="${id}">지사 개설</button></div>`;
+        }
+      }
+      h += '</div>';
+    }
+    h += '</div>';
+  } else if (natTab === 'space') {
+    const sp = my.space || {};
+    const need = Object.assign({ satellite: 1 }, R.SPACE_NEED);
+    h += `<div class="mut" style="font-size:12px;margin-bottom:10px">로켓 공학 → 발사대를 지은 도시에서 우주 프로젝트를 생산하세요. 추진체 3개, 거주 모듈 1개, 핵융합 엔진 1개를 모두 만들면 우주선이 발사되어 영구 보너스(${R.modText(R.SPACE_BONUS)})와 점수 +300을 얻습니다. 정찰 위성은 세계 지도 전체를 보여줍니다.</div>`;
+    h += `<div class="govs">${Object.entries(R.PROJECTS).map(([k, Pj]) => `<div class="govc ${(sp[k] || 0) >= need[k] ? 'cur' : ''}"><b style="display:flex;gap:6px;align-items:center">${ic(k, 18)} ${Pj.name}</b><small>${Pj.desc}</small><div>${sp[k] || 0} / ${need[k]}</div>${bar(sp[k] || 0, need[k], '#a5b4fc')}<small>${T[Pj.tech] ? '' : ic('lock', 11) + ' ' + R.TECHS[Pj.tech].name + ' 필요'}</small></div>`).join('')}</div>`;
+    h += `<div class="hint" style="margin-top:12px">${ic('rocket', 18)} ${my.launched ? `<b>${my.launched}턴에 우주선을 발사했습니다!</b>` : '아직 우주선을 발사하지 않았습니다'}</div>`;
+    const race = (S.space || []).sort((a, b) => (b.launched ? 1 : 0) - (a.launched ? 1 : 0));
+    if (race.length) h += `<div class="sec">세계 우주 경쟁</div><table class="mtable">${race.map(q => `<tr><td><span style="color:${pcolor(q.id)}">●</span> ${esc(pname(q.id))}</td><td>위성 ${q.satellite || 0}</td><td>추진체 ${q.booster || 0}/3</td><td>모듈 ${q.habitat || 0}/1</td><td>엔진 ${q.engine || 0}/1</td><td>${q.launched ? `<b style="color:#a5b4fc">${q.launched}턴 발사</b>` : ''}</td></tr>`).join('')}</table>`;
+  } else {
+    h += `<div style="font-size:13px;line-height:1.8">${(S.history || []).slice().reverse().map(x => `<div><span class="dim">[${x.turn}턴]</span> ${esc(x.text)}</div>`).join('') || '<span class="mut">아직 큰 사건이 없습니다</span>'}</div>`;
+  }
+  $('#natBody').innerHTML = h;
+}
+$('#natTabs').onclick = e => { const b = e.target.closest('[data-ntab]'); if (b) { natTab = b.dataset.ntab; renderNation(); } };
+$('#natBody').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.fest) act('festival');
+  if (b.dataset.found) { const sel2 = $('#natBody').querySelector(`select[data-corpcity="${b.dataset.found}"]`); if (sel2) act('corpFound', { corp: b.dataset.found, city: +sel2.value }); }
+  if (b.dataset.branch) { const sel2 = $('#natBody').querySelector(`select[data-brcity="${b.dataset.branch}"]`); if (sel2) act('corpBranch', { corp: b.dataset.branch, city: +sel2.value }); }
+  if (b.dataset.nat) { const [cid, city] = b.dataset.nat.split(':'); if (b.dataset.sure) act('nationalize', { corp: cid, city: +city }); else { b.dataset.sure = 1; b.textContent = '정말?'; } }
+};
+$('#bNation').onclick = () => openNation();
+$('#hStab').onclick = () => openNation('stab');
+
 // ───────── 외교 ─────────
 function openDip(tab) { if (tab) dipTab = tab; renderDip(); $('#mDip').classList.add('on'); }
 function renderDip() {
@@ -888,8 +1109,8 @@ function renderDip() {
         : `<button class="sm danger" data-war="${q.id}">${ic('swords', 13)} 선전포고${q.pu || q.nap ? ' (배신)' : ''}</button>`;
       return `<div class="civrow"><span class="sw" style="background:${q.color}"></span><div style="min-width:0"><b>${esc(q.name)}</b> <span class="mut">${R.CIVS[q.civ].name}</span> ${q.ai ? '<span class="tag ai">AI</span>' : q.online ? '<span class="tag on">접속</span>' : '<span class="tag off">오프라인</span>'}
         <div class="tags">${relTags(q.id)}</div>
-        <div class="meta">${q.gov ? `<span>${ic('gov', 12)} ${R.GOVS[q.gov].name}</span>` : ''}<span>태도: <b style="color:${q.op >= 15 ? 'var(--green)' : q.op <= -15 ? 'var(--red)' : 'var(--text)'}">${q.op >= 50 ? '우호적' : q.op >= 15 ? '호의적' : q.op > -15 ? '중립' : q.op > -50 ? '경계' : '적대적'}</b> (${q.op})</span><span class="opbar" style="display:inline-block"><i style="left:${opPos}%"></i></span><span>군사력 ${milTxt}</span><span>신뢰 ${q.trust}</span><span>도시 ${q.cities} · 점수 ${q.score}</span>${treaty ? `<span>${treaty}</span>` : ''}</div></div>
-        <div class="btns"><button class="sm pri" data-deal="${q.id}">${ic('swap', 13)} ${q.d === 'war' ? '평화 협상' : '거래 제안'}</button>${warBtn}</div></div>`;
+        <div class="meta">${q.rebel ? '<span class="neg">반군 국가</span>' : ''}${q.gov ? `<span>${ic('gov', 12)} ${R.GOVS[q.gov].name}</span>` : ''}${q.stab != null ? `<span>안정도 ${q.stab}</span>` : ''}${q.launched ? `<span style="color:#a5b4fc">${ic('rocket', 12)} 우주 진출</span>` : ''}<span>태도: <b style="color:${q.op >= 15 ? 'var(--green)' : q.op <= -15 ? 'var(--red)' : 'var(--text)'}">${q.op >= 50 ? '우호적' : q.op >= 15 ? '호의적' : q.op > -15 ? '중립' : q.op > -50 ? '경계' : '적대적'}</b> (${q.op})</span><span class="opbar" style="display:inline-block"><i style="left:${opPos}%"></i></span><span>군사력 ${milTxt}</span><span>신뢰 ${q.trust}</span><span>도시 ${q.cities} · 점수 ${q.score}</span>${treaty ? `<span>${treaty}</span>` : ''}</div></div>
+        <div class="btns"><button class="sm pri" data-deal="${q.id}">${ic('swap', 13)} ${q.d === 'war' ? '평화 협상' : '거래 제안'}</button>${warBtn}${q.al ? '' : `<button class="sm ghost" data-incite="${q.id}" title="금 150 · 상대 안정도 하락, 40% 확률로 발각">${ic('spy', 13)} 반군 지원</button>`}</div></div>`;
     }).join('') || '<div class="mut">아직 만난 문명이 없습니다. 정찰병으로 세계를 탐험해 보세요.</div>';
   } else if (dipTab === 'props') {
     const mineIn = (S.props || []).filter(p => p.to === me), mineOut = (S.props || []).filter(p => p.from === me);
@@ -934,6 +1155,7 @@ $('#dipBody').onclick = e => {
   if (b.dataset.deal) openDeal(+b.dataset.deal);
   if (b.dataset.war) { if (b.dataset.sure) act('war', { target: +b.dataset.war }); else { b.dataset.sure = 1; b.innerHTML = `${ic('swords', 13)} 정말 전쟁?`; } }
   if (b.dataset.cancel) { if (b.dataset.sure) act('cancelAlliance', { target: +b.dataset.cancel }); else { b.dataset.sure = 1; b.textContent = '정말 파기?'; } }
+  if (b.dataset.incite) { if (b.dataset.sure) act('incite', { target: +b.dataset.incite }); else { b.dataset.sure = 1; b.innerHTML = `${ic('spy', 13)} 금 150 · 진행?`; } }
   if (b.dataset.acc) act('respond', { prop: +b.dataset.acc, accept: true });
   if (b.dataset.rej) act('respond', { prop: +b.dataset.rej, accept: false });
   if (b.dataset.cprop) act('cancelProp', { prop: +b.dataset.cprop });
@@ -1087,7 +1309,7 @@ function drawBattle() {
     c.globalAlpha = fade;
     unitToken(c, u.t, u.o, pos[0], pos[1], 17, {});
     if (u.eq && u.eq.weapon) IC.draw(c, u.eq.weapon, pos[0] + 15, pos[1] - 14, 11, '#f0c35a', 2.6);
-    c.fillStyle = '#000a'; c.fillRect(pos[0] - 18, pos[1] + 21, 36, 5); c.fillStyle = hpCol(hp); c.fillRect(pos[0] - 18, pos[1] + 21, 36 * Math.max(0, hp) / 100, 5);
+    c.fillStyle = '#000a'; c.fillRect(pos[0] - 18, pos[1] + 21, 36, 5); c.fillStyle = hpCol(hp); c.fillRect(pos[0] - 18, pos[1] + 21, 36 * Math.max(0, hp) / R.HPMAX, 5);
     c.globalAlpha = 1;
   }
   if (BT.city) {
@@ -1145,6 +1367,7 @@ document.addEventListener('keydown', e => {
   else if (k === 't') openTech();
   else if (k === 'd') openDip();
   else if (k === 'p') openIdeo();
+  else if (k === 'g') openNation();
   else if (k === 'm') openMarket();
   else if (sel && sel.kind === 'stack') {
     if (k === 'f') { act('fortify', { units: pickedUnits().map(u => u.id) }); autoNext = true; }
