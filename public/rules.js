@@ -91,6 +91,7 @@
     animal:          { name: '목축',       era: 0, cost: 30,  req: ['agriculture'], desc: '말 목장' },
     archery:         { name: '궁술',       era: 0, cost: 30,  req: ['agriculture'] },
     mining:          { name: '채광',       era: 0, cost: 30,  req: ['agriculture'], desc: '구리·석재·금 광산' },
+    sailing:         { name: '돛단배',     era: 0, cost: 45,  req: ['pottery'], desc: '얕은 바다(해안 2칸) 항해' },
     calendar:        { name: '역법',       era: 0, cost: 50,  req: ['pottery'], bonus: { growthPct: 5 } },
     trapping:        { name: '덫 사냥',    era: 0, cost: 45,  req: ['animal'], bonus: { goldPct: 3 } },
     mysticism:       { name: '신비주의',   era: 0, cost: 45,  req: ['pottery'], bonus: { cityCul: 1 } },
@@ -105,7 +106,7 @@
     math:            { name: '수학',       era: 1, cost: 100, req: ['writing', 'archery'] },
     drama:           { name: '연극',       era: 1, cost: 100, req: ['mysticism', 'writing'] },
     philosophy:      { name: '철학',       era: 1, cost: 120, req: ['code_of_laws', 'mysticism'], bonus: { culPct: 10 } },
-    optics:          { name: '광학',       era: 1, cost: 110, req: ['math'], bonus: { vetPct: 5 } },
+    optics:          { name: '광학',       era: 1, cost: 110, req: ['math', 'sailing'], bonus: { vetPct: 5 } },
     construction:    { name: '건축',       era: 1, cost: 120, req: ['masonry', 'math'], res: { stone: 5, wood: 5 } },
     engineering:     { name: '공학',       era: 1, cost: 130, req: ['construction', 'wheel'], bonus: { improveSpeed: 1 } },
     chivalry:        { name: '기사도',     era: 2, cost: 160, req: ['horseback', 'iron'], res: { horse: 3, iron: 2 } },
@@ -123,7 +124,7 @@
     economics:       { name: '경제학',     era: 3, cost: 280, req: ['banking', 'printing'], bonus: { marketCut: 5 } },
     physics:         { name: '물리학',     era: 3, cost: 280, req: ['astronomy', 'printing'], bonus: { sciPct: 5 } },
     acoustics:       { name: '음향학',     era: 3, cost: 260, req: ['printing', 'drama'], bonus: { culPct: 10 } },
-    navigation:      { name: '항해술',     era: 3, cost: 270, req: ['astronomy', 'optics'], bonus: { marketCut: 5, tradeOp: 3 } },
+    navigation:      { name: '항해술',     era: 3, cost: 270, req: ['astronomy', 'optics', 'sailing'], bonus: { marketCut: 5, tradeOp: 3 }, desc: '먼바다 항해' },
     chemistry:       { name: '화학',       era: 3, cost: 290, req: ['gunpowder', 'physics'], bonus: { foodPct: 5 } },
     metallurgy:      { name: '야금술',     era: 3, cost: 300, req: ['gunpowder'], res: { coal: 4, iron: 4 } },
     social_contract: { name: '사회계약론', era: 3, cost: 300, req: ['economics', 'civil'] },
@@ -162,6 +163,7 @@
     temple:         { name: '사원',           cost: 50,  res: { wood: 2, stone: 1 }, tech: 'mysticism', desc: '문화 +2', cul: 2 },
     barracks:       { name: '병영',           cost: 60,  res: { wood: 3 }, tech: 'bronze', desc: '생산 유닛 전투력 +15%' },
     forge:          { name: '대장간',         cost: 90,  res: { stone: 3, iron: 2 }, tech: 'guilds', desc: '생산 +2', prod: 2 },
+    harbor:         { name: '항구',           cost: 70,  res: { wood: 4 }, tech: 'sailing', coastal: true, desc: '해안 도시 전용 · 식량 +2, 금 +2', food: 2, gold: 2 },
     library:        { name: '도서관',         cost: 70,  res: { wood: 2 }, tech: 'writing', desc: '과학 +3', sci: 3 },
     walls:          { name: '성벽',           cost: 70,  res: { stone: 4 }, tech: 'masonry', desc: '방어 +8, 체력 +30', def: 8, hp: 30 },
     market:         { name: '시장',           cost: 90,  res: { wood: 2 }, tech: 'currency', desc: '금 +3', gold: 3 },
@@ -309,6 +311,43 @@
       { id: 'superpower', name: '초강대국', mods: { atkPct: 10, defPct: 10, upkeepFree: 5 } } ] },
   });
   const HPMAX = 60, DMG = 1.2, CITY_HP = 120;
+  // 총독: 도시에 임명해 특화
+  const GOVERNORS = {
+    admin:     { name: '행정관',   icon: 'prod',   eff: { prod: 2, prodPct: 15 }, desc: '생산 +2, 생산 +15%' },
+    treasurer: { name: '재무관',   icon: 'coin',   eff: { gold: 2, goldPct: 25 }, desc: '금 +2, 금 +25%' },
+    scholar:   { name: '학자',     icon: 'flask',  eff: { sci: 2, sciPct: 25 }, desc: '과학 +2, 과학 +25%' },
+    steward:   { name: '농정관',   icon: 'food',   eff: { food: 3 }, desc: '식량 +3' },
+    curator:   { name: '문화관',   icon: 'culture', eff: { cul: 2, culPct: 25 }, desc: '문화 +2, 문화 +25%' },
+    warden:    { name: '수비대장', icon: 'shield', eff: { defPct: 30, heal: 10 }, desc: '도시 방어 +30%, 도시 회복 +10' },
+  };
+  // 지배층 세력: 정부 체제와 사상에 따라 구성이 달라짐
+  const ESTATES = {
+    nobles:        { name: '귀족',     icon: 'crown',   bonus: { capProd: 3, cityDefPct: 10 }, desc: '토지와 성을 가진 세습 지배층', risk: '불만이 크면 지방 도시가 반역해 독립' },
+    clergy:        { name: '성직자',   icon: 'temple',  bonus: { culPct: 10, stability: 3 }, desc: '신앙과 의례를 이끄는 종교 지도층', risk: '불만이 크면 안정도 하락' },
+    merchants:     { name: '상인 길드', icon: 'scale',  bonus: { goldPct: 15, marketCut: 5 }, desc: '교역과 금융을 쥔 상공인 세력', risk: '불만이 크면 금이 빠져나감' },
+    military:      { name: '군부',     icon: 'swords',  bonus: { atkPct: 8, milProdPct: 15 }, desc: '장군과 장교들', risk: '불만이 크면 쿠데타 위험 급증' },
+    bureaucrats:   { name: '관료',     icon: 'scroll',  bonus: { upkeepFree: 3, stability: 3 }, desc: '국가 행정을 맡은 관리 집단', risk: '불만이 크면 행정 마비(금·생산 감소)' },
+    intellectuals: { name: '지식인',   icon: 'flask',   bonus: { sciPct: 12 }, desc: '학자·언론인·사상가', risk: '불만이 크면 혁명 위험 증가' },
+    workers:       { name: '노동자',   icon: 'hammer',  bonus: { prodPct: 10 }, desc: '공장과 광산의 노동 계급', risk: '불만이 크면 파업·혁명 위험' },
+  };
+  const GOV_ESTATES = {
+    tribal: { military: 40, nobles: 30, clergy: 30 }, monarchy: { nobles: 50, clergy: 30, military: 20 }, feudal: { nobles: 60, military: 30, clergy: 10 },
+    theocracy: { clergy: 60, nobles: 25, merchants: 15 }, republic: { merchants: 45, intellectuals: 30, nobles: 25 }, democracy: { merchants: 35, intellectuals: 35, workers: 30 },
+    autocracy: { military: 50, bureaucrats: 35, merchants: 15 }, communism: { workers: 45, bureaucrats: 40, military: 15 },
+  };
+  const TREE_ESTATE = { tradition: 'nobles', honor: 'military', piety: 'clergy', commerce: 'merchants', liberty: 'merchants', rationalism: 'intellectuals', industrialism: 'workers', order: 'workers', totalitarian: 'military', freedom: 'intellectuals', patronage: 'merchants', aesthetics: 'clergy', exploration: 'merchants' };
+  // 사령관 특성
+  const CMDR_TRAITS = {
+    aggressive: { name: '맹장',         desc: '공격력 +10%', atk: 10 },
+    stalwart:   { name: '철벽',         desc: '방어력 +10%', def: 10 },
+    tactician:  { name: '전술가',       desc: '자동 전투에서 상대 전술을 90% 간파, 피해 +5%', atk: 5, read: 0.9 },
+    logistic:   { name: '병참의 달인', desc: '회복 +10, 무료 유지 유닛 +2', heal: 10, upkeep: 2 },
+    siege:      { name: '공성 전문가', desc: '도시 공격 +25%', siege: 25 },
+    cavalry:    { name: '기동전',       desc: '기마 유닛 공격 +15%', mounted: 15 },
+  };
+  const CMDR_NAMES = { sur: ['김', '이', '박', '최', '정', '강', '조', '윤', '장', '임', '한', '오', '서', '신', '권', '황', '안', '송', '류', '홍'], given: ['무열', '충무', '계백', '을지', '연개', '광수', '대조', '온달', '지석', '태준', '현우', '민준', '서진', '도윤', '해린', '도현', '시우', '준혁', '지호', '용운'] };
+  const CMDR_STANCE = { defend: { name: '방어', desc: '영토와 도시를 지키고, 들어온 적만 공격' }, balanced: { name: '균형', desc: '가까운 적을 공격하고 국경을 지킴' }, attack: { name: '공격', desc: '전쟁 중인 나라의 도시로 진군해 점령 시도' } };
+  const CMDR_MODE = { off: '지휘하지 않음', offline: '내가 오프라인일 때만', always: '항상 (매 턴 시작 시)' };
   const POLICY = {};
   for (const [tk, t] of Object.entries(POLICY_TREES)) t.policies.forEach((p, i) => { POLICY[p.id] = Object.assign({ tree: tk, idx: i }, p); });
   function policyCost(n, cities, speed) { return Math.max(5, Math.round((20 + 12 * n + 1.6 * n * n) * speed * (1 + 0.08 * Math.max(0, cities - 1)))); }
@@ -373,7 +412,7 @@
     return out;
   }
   // 남은 이동력이 조금이라도 있으면 비용이 커도 진입 가능 (문명 방식)
-  function reach(W, H, terr, start, moves, canEnter, canEnd) {
+  function reach(W, H, terr, start, moves, canEnter, canEnd, passFn) {
     const best = new Map([[start, moves]]), open = [[moves, start]];
     while (open.length) {
       let bi = 0;
@@ -382,14 +421,21 @@
       if (rem < best.get(i) || rem <= 0) continue;
       for (const n of neighbors(i, W, H)) {
         const t = TERRAIN[terr[n]];
-        if (!t.pass || !canEnter(n)) continue;
-        const nr = Math.max(0, rem - t.move);
+        if (!(passFn ? passFn(n) : t.pass) || !canEnter(n)) continue;
+        const nr = Math.max(0, rem - (t.pass ? t.move : 1));
         if (!best.has(n) || best.get(n) < nr) { best.set(n, nr); open.push([nr, n]); }
       }
     }
     const out = new Map();
     for (const [i, r] of best) if (i !== start && canEnd(i)) out.set(i, r);
     return out;
+  }
+  // 육지에서 2칸 이내 바다 = 얕은 바다 (돛단배로 항해 가능)
+  function shallowMap(terr, W, H) {
+    const N = W * H, d = new Uint8Array(N).fill(9);
+    let fr = []; for (let i = 0; i < N; i++) if (terr[i] !== 'ocean') { d[i] = 0; fr.push(i); }
+    for (let k = 1; k <= 2; k++) { const nf = []; for (const i of fr) for (const n of neighbors(i, W, H)) if (d[n] > k) { d[n] = k; nf.push(n); } fr = nf; }
+    return d;
   }
   // 이 칸에 지을 수 있는 시설 (기술 무시)
   function impFor(terr, res) {
@@ -418,7 +464,7 @@
   }
 
   const R = { TERRAIN, STOCK, RES, IMPS, IMP_BY_CODE, UNITS, EQUIP, SLOTS, ERAS, TECHS, BUILDINGS, PROCESSES, TACTICS, CIVS, SPEEDS, TREATY,
-    HPMAX, DMG, CITY_HP, MOD_TEXT, GOVS, POLICY_TREES, POLICY, PROJECTS, SPACE_NEED, SPACE_BONUS, CORPS, CORP_COST, policyCost, sumMods, modText,
+    HPMAX, DMG, CITY_HP, GOVERNORS, ESTATES, GOV_ESTATES, TREE_ESTATE, CMDR_TRAITS, CMDR_NAMES, CMDR_STANCE, CMDR_MODE, shallowMap, MOD_TEXT, GOVS, POLICY_TREES, POLICY, PROJECTS, SPACE_NEED, SPACE_BONUS, CORPS, CORP_COST, policyCost, sumMods, modText,
     neighbors, dist, inRadius, reach, impFor, impTechOk, hasRes, availUnits, availBuildings, availEquip, availTechs, canEquip };
   if (typeof module !== 'undefined' && module.exports) module.exports = R;
   else root.RULES = R;

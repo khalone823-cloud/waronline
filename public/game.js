@@ -4,18 +4,18 @@ const R = RULES, IC = ICONS, $ = s => document.querySelector(s);
 const ic = (n, s, c) => IC.svg(n, s || 16, c);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const STOCK_KEYS = Object.keys(R.STOCK);
-const CLIENT_VER = 4;
+const CLIENT_VER = 5;
 const RES_COLOR = { wheat: '#f2d16b', fish: '#7dd3fc', horse: '#d9b38c', copper: '#e0894a', stone: '#c4beb8', gold: '#f0c35a', iron: '#a9c1d9', saltpeter: '#f3efe2', coal: '#9ca3af' };
 
 let ws = null, token = localStorage.getItem('civwar_token') || null, savedName = localStorage.getItem('civwar_myname') || '';
 let myCiv = +(localStorage.getItem('civwar_civ') || 0);
 let MAP = null, S = null, me = -1, FOG = '', OWNER = [], IMP = '', inGame = false, wantRejoin = false;
 let unitById = new Map(), unitsAt = new Map(), cityAt = new Map(), cityById = new Map();
-let sel = null, reachMap = new Map(), battleT = new Set(), bombT = new Set(), shootMode = false, shootT = new Set();
+let admRenderPending = false, adminOn = false, admTab = 'nations', admSort = 'score', gotoMode = false, sel = null, reachMap = new Map(), battleT = new Set(), bombT = new Set(), shootMode = false, shootT = new Set();
 let autoNext = false, lastTurn = 0, chatUnread = 0, fxList = [], turnEndAt = 0, hoverTile = -1, deadShown = false, cityTab = 'prod', dipTab = 'civs';
 const cam = { x: 0, y: 0, z: 1 };
 const HS = 30, SQ3 = Math.sqrt(3);
-let worldW = 0, worldH = 0, terrCv = null, overCv = null, kScale = 1, miniBase = null, miniOn = innerWidth > 500;
+let SHALLOW = null, worldW = 0, worldH = 0, terrCv = null, overCv = null, kScale = 1, miniBase = null, miniOn = innerWidth > 500;
 
 // ───────── 공통 ─────────
 function toast(text, err) { const box = $('#toast'); while (box.children.length >= 3) box.firstChild.remove(); const d = document.createElement('div'); d.textContent = text; if (err) d.className = 'err'; box.appendChild(d); setTimeout(() => d.remove(), 3300); }
@@ -50,7 +50,7 @@ function onMsg(m) {
     case 'map':
       if (m.ver !== CLIENT_VER) { if (!sessionStorage.getItem('civwar_reloaded')) { sessionStorage.setItem('civwar_reloaded', '1'); location.reload(); return; } toast('서버와 화면 파일 버전이 다릅니다. 모든 파일을 같은 버전으로 올려 주세요', true); }
       else sessionStorage.removeItem('civwar_reloaded');
-      MAP = m; FOG = ''; OWNER = []; IMP = ''; S = null; deadShown = false; buildTerrain(); show('game'); wantRejoin = false; break;
+      MAP = m; FOG = ''; OWNER = []; IMP = ''; S = null; fogCv = null; deadShown = false; SHALLOW = R.shallowMap(MAP.terr, MAP.W, MAP.H); buildTerrain(); show('game'); wantRejoin = false; break;
     case 'state': onState(m); break;
     case 'log': if (m.text) addFeed(m.text, m.turn); break;
     case 'fx': for (const it of m.items) fxList.push({ i: it.pos, txt: it.txt || (it.dmg ? '-' + it.dmg : ''), t0: performance.now(), good: !!it.txt }); dirty = true; break;
@@ -58,6 +58,7 @@ function onMsg(m) {
     case 'chatlog': $('#gChat').innerHTML = ''; m.chat.forEach(c => addChat(c, true)); feedItems = (m.log || []).map(l => ({ text: l.text, turn: l.turn, at: 0 })); renderFeed(); break;
     case 'battle': onBattle(m); break;
     case 'error': toast(m.msg, true); break;
+    case 'admin': adminOn = !!m.on; toast(adminOn ? '관리자 모드를 켰습니다. 전체 지도와 모든 나라 정보가 보입니다' : '관리자 모드를 껐습니다'); renderAdmBox(); $('#bAdmin').style.display = adminOn ? '' : 'none'; if (S) renderHud(); if (adminOn) { $('#mMenu').classList.remove('on'); openAdmin(); } else $('#mAdmin').classList.remove('on'); break;
     case 'kicked': toast(m.msg, true); goHome(); break;
     case 'left': goHome(); break;
     case 'rejoinFail': token = null; localStorage.removeItem('civwar_token'); wantRejoin = false; $('#conn').classList.remove('on'); goHome(); toast('이전 제국을 찾을 수 없어 새로 시작해야 합니다', true); break;
@@ -140,7 +141,7 @@ function pine(c, x, y, s) {
 }
 function buildTerrain() {
   worldW = MAP.W * SQ3 * HS + SQ3 * HS / 2; worldH = MAP.H * 1.5 * HS + HS / 2;
-  kScale = Math.min(1.6, 3800 / worldW, 3800 / worldH);
+  kScale = Math.min(1.6, 4096 / worldW, 4096 / worldH, Math.sqrt(9.5e6 / (worldW * worldH)));
   terrCv = document.createElement('canvas'); terrCv.width = Math.ceil(worldW * kScale); terrCv.height = Math.ceil(worldH * kScale);
   overCv = document.createElement('canvas'); overCv.width = terrCv.width; overCv.height = terrCv.height;
   const c = terrCv.getContext('2d'); c.scale(kScale, kScale);
@@ -264,6 +265,87 @@ function drawImprovement(c, imp, cx, cy, i, r) {
     c.fillStyle = '#222'; c.beginPath(); c.arc(x + 14, y + 8.5, 1.4, 0, 7); c.arc(x + 19, y + 8.5, 1.4, 0, 7); c.fill();
   }
 }
+// ───────── 부드러운 안개 (그라데이션 + 구름 질감 + 걷히는 애니메이션) ─────────
+let fogCv = null, fogPrev = null, fogTmp = null, fogTmp2 = null, fogMix = null, fogS = 0.3, fogT0 = 0, fogHas = false, cloudCv = null;
+const FOG_FADE = 650;
+const FILTER_OK = (() => { try { const c = document.createElement('canvas').getContext('2d'); if (typeof c.filter !== 'string') return false; c.filter = 'blur(2px)'; return c.filter === 'blur(2px)'; } catch (e) { return false; } })();
+function makeCloud() {
+  const S2 = 256, cv2 = document.createElement('canvas'); cv2.width = cv2.height = S2;
+  const c = cv2.getContext('2d'), img = c.createImageData(S2, S2);
+  const oct = [[8, 0.5], [16, 0.25], [32, 0.15], [64, 0.1]].map(([g, a]) => { const v = new Float32Array(g * g); for (let k = 0; k < v.length; k++) v[k] = Math.random(); return { g, a, v }; });
+  const sm = t => t * t * (3 - 2 * t);
+  for (let y = 0; y < S2; y++) for (let x = 0; x < S2; x++) {
+    let n = 0;
+    for (const o of oct) {
+      const fx = x / S2 * o.g, fy = y / S2 * o.g, x0 = Math.floor(fx), y0 = Math.floor(fy), tx = sm(fx - x0), ty = sm(fy - y0);
+      const at = (a, b) => o.v[((b % o.g) * o.g) + (a % o.g)];
+      const top = at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx, bot = at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx;
+      n += (top * (1 - ty) + bot * ty) * o.a;
+    }
+    n = Math.max(0, Math.min(1, (n - 0.25) * 1.6));
+    const k = (y * S2 + x) * 4;
+    img.data[k] = 5 + n * 26; img.data[k + 1] = 7 + n * 30; img.data[k + 2] = 13 + n * 44; img.data[k + 3] = 255;
+  }
+  c.putImageData(img, 0, 0);
+  return cv2;
+}
+function fogInit() {
+  fogS = Math.min(0.32, Math.sqrt(1.6e6 / (worldW * worldH)));
+  const w = Math.ceil(worldW * fogS), h = Math.ceil(worldH * fogS);
+  const mk = (a, b) => { const c = document.createElement('canvas'); c.width = a; c.height = b; return c; };
+  fogCv = mk(w, h); fogPrev = mk(w, h); fogTmp = mk(w, h); fogMix = mk(w, h); fogTmp2 = mk(Math.ceil(w / 4), Math.ceil(h / 4));
+  if (!cloudCv) cloudCv = makeCloud();
+  fogHas = false;
+}
+function blurInto(dst, src, r) {
+  if (FILTER_OK) { dst.filter = `blur(${r}px)`; dst.drawImage(src, 0, 0); dst.filter = 'none'; return; }
+  const t = fogTmp2.getContext('2d'); t.clearRect(0, 0, fogTmp2.width, fogTmp2.height); t.imageSmoothingEnabled = true;
+  t.drawImage(src, 0, 0, fogTmp2.width, fogTmp2.height);
+  dst.imageSmoothingEnabled = true; dst.imageSmoothingQuality = 'high'; dst.drawImage(fogTmp2, 0, 0, src.width, src.height);
+}
+function fogHexes(t, test, r) {
+  t.setTransform(1, 0, 0, 1, 0, 0); t.clearRect(0, 0, fogTmp.width, fogTmp.height);
+  t.setTransform(fogS, 0, 0, fogS, 0, 0); t.fillStyle = '#000'; t.beginPath();
+  const N = MAP.W * MAP.H; let any = false;
+  for (let i = 0; i < N; i++) {
+    if (!test(FOG.charCodeAt(i))) continue; any = true;
+    const [cx, cy] = center(i);
+    for (let k = 0; k < 6; k++) { const a = (-90 + 60 * k) * Math.PI / 180, x = cx + r * Math.cos(a), y = cy + r * Math.sin(a); if (k) t.lineTo(x, y); else t.moveTo(x, y); }
+    t.closePath();
+  }
+  t.fill(); return any;
+}
+function buildFog() {
+  if (!fogCv || fogCv.width !== Math.ceil(worldW * fogS)) fogInit();
+  const f = fogCv.getContext('2d'), pv = fogPrev.getContext('2d'), t = fogTmp.getContext('2d');
+  pv.clearRect(0, 0, fogPrev.width, fogPrev.height); if (fogHas) { pv.drawImage(fogCv, 0, 0); fogT0 = performance.now(); }
+  f.globalCompositeOperation = 'source-over'; f.clearRect(0, 0, fogCv.width, fogCv.height);
+  const r = Math.max(2, HS * fogS * 0.42);
+  if (fogHexes(t, ch => ch <= 49, HS * 1.22)) { f.globalAlpha = 0.5; blurInto(f, fogTmp, r); }
+  if (fogHexes(t, ch => ch === 48, HS * 1.32)) { f.globalAlpha = 1; blurInto(f, fogTmp, r); blurInto(f, fogTmp, r * 0.5); }
+  f.globalAlpha = 1;
+  f.globalCompositeOperation = 'source-atop';
+  const pat = f.createPattern(cloudCv, 'repeat');
+  if (pat.setTransform && window.DOMMatrix) pat.setTransform(new DOMMatrix().scale(1.4, 1.4));
+  f.fillStyle = pat; f.fillRect(0, 0, fogCv.width, fogCv.height);
+  f.globalCompositeOperation = 'source-over';
+  fogHas = true; dirty = true;
+}
+function drawFog() {
+  if (!fogCv || !fogHas) return;
+  const ft = (performance.now() - fogT0) / FOG_FADE;
+  ctx.imageSmoothingEnabled = true;
+  if (ft < 1) {
+    const m = fogMix.getContext('2d'), e = ft * ft * (3 - 2 * ft);
+    m.globalCompositeOperation = 'source-over'; m.clearRect(0, 0, fogMix.width, fogMix.height);
+    m.globalAlpha = 1 - e; m.drawImage(fogPrev, 0, 0);
+    m.globalCompositeOperation = 'lighter'; m.globalAlpha = e; m.drawImage(fogCv, 0, 0);
+    m.globalCompositeOperation = 'source-over'; m.globalAlpha = 1;
+    ctx.drawImage(fogMix, 0, 0, worldW, worldH);
+    dirty = true; fogAnim = true;
+  } else { ctx.drawImage(fogCv, 0, 0, worldW, worldH); fogAnim = false; }
+}
+let fogAnim = false;
 function buildOverlay() {
   const c = overCv.getContext('2d');
   c.setTransform(1, 0, 0, 1, 0, 0); c.clearRect(0, 0, overCv.width, overCv.height); c.scale(kScale, kScale);
@@ -290,11 +372,7 @@ function buildOverlay() {
       c.beginPath(); c.moveTo(x1, y1); c.lineTo(x2, y2); c.strokeStyle = pcolor(o); c.lineWidth = 3; c.stroke();
     }
   }
-  for (let i = 0; i < N; i++) {
-    const f = fog.charCodeAt(i) - 48; if (f === 2) continue;
-    const [cx, cy] = center(i);
-    hexPath(c, cx, cy, HS + 1.6); c.fillStyle = f === 0 ? '#05070d' : '#05070d80'; c.fill();
-  }
+  buildFog();
   const m = miniBase.getContext('2d'), img = m.createImageData(miniBase.width, miniBase.height);
   for (let i = 0; i < N; i++) {
     const x = i % MAP.W, y = (i / MAP.W) | 0, f = fog.charCodeAt(i) - 48;
@@ -332,9 +410,20 @@ function drawStack(i, us) {
     const main = mil[0] || civ[0];
     const ox = owners.length > 1 ? (k ? 12 : -12) : 0;
     const r = inCity ? HS * 0.32 : HS * 0.46;
-    const x = cx + ox + (inCity ? HS * 0.42 : 0), y = cy + (inCity ? HS * 0.5 : -2);
+    const x = cx + ox + (inCity ? HS * 0.42 : 0), y = cy + (inCity ? HS * 0.5 : MAP.terr[i] === 'ocean' ? -6 : -2);
     const selected = sel && sel.kind === 'stack' && sel.tile === i && o === me;
     const war = o !== me && P(o) && P(o).d === 'war';
+    if (MAP.terr[i] === 'ocean') {
+      ctx.save(); ctx.translate(x, y);
+      ctx.fillStyle = '#e8dcc0'; ctx.strokeStyle = '#3b2a17'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(r * 0.15, -r * 1.55); ctx.lineTo(r * 1.15, r * 0.35); ctx.lineTo(r * 0.15, r * 0.35); ctx.closePath(); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(r * 0.1, -r * 1.6); ctx.lineTo(r * 0.1, r * 0.6); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-r * 1.6, r * 0.45); ctx.lineTo(r * 1.6, r * 0.45); ctx.lineTo(r * 1.1, r * 1.15); ctx.lineTo(-r * 1.1, r * 1.15); ctx.closePath();
+      ctx.fillStyle = '#7a5230'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = '#2b1a0c'; ctx.stroke();
+      ctx.fillStyle = '#c8a06a'; ctx.fillRect(-r * 1.35, r * 0.5, r * 2.7, r * 0.12);
+      ctx.strokeStyle = '#ffffff70'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(-r * 1.7, r * 1.3); ctx.quadraticCurveTo(0, r * 1.5, r * 1.7, r * 1.3); ctx.stroke();
+      ctx.restore();
+    }
     if (list.length > 1) unitToken(ctx, main.t, o, x + 3, y - 3, r, { war });
     unitToken(ctx, main.t, o, x, y, r, { sel: selected, war });
     if (mil.length && civ.length) unitToken(ctx, civ[0].t, o, x - r * 0.95, y + r * 0.55, r * 0.5, {});
@@ -411,8 +500,20 @@ function draw() {
   ctx.setTransform(z, 0, 0, z, -cam.x * z, -cam.y * z);
   ctx.drawImage(terrCv, 0, 0, worldW, worldH);
   ctx.drawImage(overCv, 0, 0, worldW, worldH);
+  drawFog();
   const vx0 = cam.x - HS * 2, vy0 = cam.y - HS * 2, vx1 = cam.x + cv.clientWidth / cam.z + HS * 2, vy1 = cam.y + cv.clientHeight / cam.z + HS * 2;
   const vis = i => { const [x, y] = center(i); return x > vx0 && x < vx1 && y > vy0 && y < vy1; };
+  if (S.units) for (const u of S.units) {
+    if (u.o !== me || u.g == null) continue;
+    const on = sel && sel.kind === 'stack' && sel.tile === u.p;
+    const [x0, y0] = center(u.p), [x1, y1] = center(u.g);
+    ctx.save(); ctx.setLineDash([7, 6]); ctx.lineWidth = on ? 3 : 2; ctx.strokeStyle = on ? '#ffe14acc' : '#ffe14a66';
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke(); ctx.setLineDash([]);
+    ctx.globalAlpha = on ? 1 : 0.7; ctx.strokeStyle = '#1a1405'; ctx.lineWidth = 2.5; ctx.beginPath(); ctx.moveTo(x1 - 4, y1 + 12); ctx.lineTo(x1 - 4, y1 - 14); ctx.stroke();
+    ctx.fillStyle = '#ffe14a'; ctx.beginPath(); ctx.moveTo(x1 - 4, y1 - 14); ctx.lineTo(x1 + 12, y1 - 8); ctx.lineTo(x1 - 4, y1 - 2); ctx.closePath(); ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+  if (gotoMode && hoverTile >= 0 && sel && sel.kind === 'stack') { const [hx, hy] = center(hoverTile); hexPath(ctx, hx, hy, HS - 3); ctx.strokeStyle = myPass(hoverTile) ? '#ffe14a' : '#ff5c5c'; ctx.lineWidth = 3; ctx.stroke(); }
   for (const [i] of reachMap) { const [cx, cy] = center(i); hexPath(ctx, cx, cy, HS - 3); ctx.fillStyle = '#ffffff2e'; ctx.fill(); ctx.strokeStyle = '#ffffffa0'; ctx.lineWidth = 1.5; ctx.stroke(); }
   const drawT = (set, fill, stroke) => { for (const i of set) { const [cx, cy] = center(i); hexPath(ctx, cx, cy, HS - 3); ctx.fillStyle = fill; ctx.fill(); ctx.strokeStyle = stroke; ctx.lineWidth = 3; ctx.stroke(); } };
   if (shootMode) drawT(shootT, '#fb923c40', '#fb923c');
@@ -441,7 +542,7 @@ function drawMini() {
   mctx.strokeStyle = '#ffe14a'; mctx.lineWidth = 1.5 * dpr;
   mctx.strokeRect(cam.x * sx, cam.y * sy, cv.clientWidth / cam.z * sx, cv.clientHeight / cam.z * sy);
 }
-function loop() { if (dirty || fxList.length) { draw(); dirty = false; } if (btlAnim) drawBattle(); requestAnimationFrame(loop); }
+function loop() { if (dirty || fxList.length) { dirty = false; draw(); } if (btlAnim) drawBattle(); requestAnimationFrame(loop); }
 requestAnimationFrame(loop);
 
 // ───────── 카메라·입력 ─────────
@@ -453,7 +554,7 @@ function clampCam() {
 }
 function centerOn(i) { const [cx, cy] = center(i); cam.x = cx - cv.clientWidth / cam.z / 2; cam.y = cy - cv.clientHeight / cam.z * (innerWidth < 760 ? 0.3 : 0.5); clampCam(); dirty = true; }
 function minZoom() { return MAP ? Math.max(0.15, Math.min(cv.clientWidth / worldW, cv.clientHeight / worldH) * 0.9) : 0.3; }
-function zoomAt(sx, sy, f) { const wx = sx / cam.z + cam.x, wy = sy / cam.z + cam.y; cam.z = Math.max(minZoom(), Math.min(2.6, cam.z * f)); cam.x = wx - sx / cam.z; cam.y = wy - sy / cam.z; clampCam(); dirty = true; }
+function zoomAt(sx, sy, f) { const wx = sx / cam.z + cam.x, wy = sy / cam.z + cam.y; cam.z = Math.max(minZoom(), Math.min(2.4, cam.z * f)); cam.x = wx - sx / cam.z; cam.y = wy - sy / cam.z; clampCam(); dirty = true; }
 function pickTile(sx, sy) {
   if (!MAP) return -1;
   const wx = sx / cam.z + cam.x, wy = sy / cam.z + cam.y;
@@ -528,6 +629,12 @@ function rel(o) { return P(o) || {}; }
 function isWar(o) { return o !== me && rel(o).d === 'war'; }
 function friendly(o) { return o === me || rel(o).al; }
 function canEnterLand(owner) { if (owner < 0 || owner === me) return true; const r = rel(owner); return r.d === 'war' || r.al || r.ob; }
+function myPass(i) {
+  if (R.TERRAIN[MAP.terr[i]].pass) return true;
+  if (MAP.terr[i] !== 'ocean' || !S) return false;
+  const t = S.my.techs; return t.includes('navigation') || (t.includes('sailing') && SHALLOW && SHALLOW[i] <= 2);
+}
+function isCoastal(i) { return R.neighbors(i, MAP.W, MAP.H).some(n => MAP.terr[n] === 'ocean'); }
 function canStand(i) {
   const c = cityAt.get(i); if (c && c.o !== me) return false;
   const us = unitsAt.get(i); if (us && !us.every(x => friendly(x.o))) return false;
@@ -552,14 +659,14 @@ function computeSel() {
     let first = true;
     for (const u of movers) {
       const end = R.UNITS[u.t].worker ? (i => canStand(i) && workerSlotOk(i, u)) : canStand;
-      const r = R.reach(MAP.W, MAP.H, MAP.terr, u.p, u.mv, canStand, end);
+      const r = R.reach(MAP.W, MAP.H, MAP.terr, u.p, u.mv, canStand, end, myPass);
       if (first) { reachMap = r; first = false; }
       else { const nm = new Map(); for (const [k, v] of reachMap) if (r.has(k)) nm.set(k, Math.min(v, r.get(k))); reachMap = nm; }
     }
     const fighters = pickedUnits().filter(u => !R.UNITS[u.t].civ && u.mv > 0 && !u.a && !u.b);
-    if (fighters.length) {
+    if (fighters.length && MAP.terr[sel.tile] !== 'ocean') {
       for (const j of R.neighbors(sel.tile, MAP.W, MAP.H)) {
-        if (!R.TERRAIN[MAP.terr[j]].pass) continue;
+        if (!myPass(j)) continue;
         const c = cityAt.get(j), us = (unitsAt.get(j) || []).filter(x => x.o !== me);
         if (!us.length && !(c && c.o !== me)) continue;
         if (c && c.o !== me && !isWar(c.o)) continue;
@@ -589,9 +696,17 @@ function selectStack(tile, focusId, ctr) {
   shootMode = false; computeSel(); renderPanel(); dirty = true;
   if (ctr) centerOn(tile);
 }
-function select(s, ctr) { sel = s; shootMode = false; computeSel(); renderPanel(); dirty = true; if (ctr && s) { const p = s.kind === 'city' ? cityById.get(s.id)?.p : s.tile != null ? s.tile : s.i; if (p != null) centerOn(p); } }
+function select(s, ctr) { sel = s; shootMode = false; gotoMode = false; computeSel(); renderPanel(); dirty = true; if (ctr && s) { const p = s.kind === 'city' ? cityById.get(s.id)?.p : s.tile != null ? s.tile : s.i; if (p != null) centerOn(p); } }
 function tapTile(i, right) {
   if (!S) return;
+  if (sel && sel.kind === 'stack' && gotoMode) {
+    gotoMode = false; renderPanel(); dirty = true;
+    const picked = pickedUnits();
+    if (i === sel.tile) { toast('목적지 지정을 취소했습니다'); return; }
+    if (!FOG[i] || FOG[i] === '0') { toast('탐험하지 않은 곳은 목적지로 정할 수 없습니다', true); return; }
+    if (!myPass(i)) { toast(MAP.terr[i] === 'ocean' ? '그 바다로 가려면 항해 기술이 필요합니다' : '갈 수 없는 곳입니다', true); return; }
+    act('goto', { units: picked.map(u => u.id), to: i }); autoNext = true; return;
+  }
   if (sel && sel.kind === 'stack') {
     const picked = pickedUnits();
     const melee = picked.filter(u => !R.UNITS[u.t].civ && !R.UNITS[u.t].rstr && u.mv > 0 && !u.a);
@@ -616,7 +731,7 @@ function tapTile(i, right) {
   else if (next === 'city') select({ kind: 'city', id: c.id });
   else select({ kind: 'foreign', tile: i });
 }
-function waiting() { return S && S.my.alive ? S.units.filter(u => u.o === me && u.mv > 0 && !u.f && !u.s && !u.w && !u.b && !u.mi) : []; }
+function waiting() { return S && S.my.alive ? S.units.filter(u => u.o === me && u.mv > 0 && !u.f && !u.s && !u.w && !u.b && !u.mi && !u.hd && u.g == null) : []; }
 function selectNext() {
   const w = waiting(); if (!w.length) { select(null); return false; }
   let k = 0;
@@ -637,6 +752,7 @@ function onState(m) {
   for (const c of S.cities) { cityAt.set(c.p, c); cityById.set(c.id, c); }
   turnEndAt = Date.now() + S.left;
   if (mapChanged && FOG) buildOverlay();
+  if (adminOn && $('#mAdmin').classList.contains('on') && !admRenderPending) { admRenderPending = true; setTimeout(() => { admRenderPending = false; renderAdmin(); }, 400); }
   if (first) {
     cam.z = innerWidth < 760 ? 0.85 : 1.05;
     const cap = S.cities.find(c => c.o === me && c.cap) || S.cities.find(c => c.o === me);
@@ -676,12 +792,13 @@ function renderNav() {
   const canPol = S && S.my.alive && !S.my.anarchy && S.my.culture >= S.my.pcost && Object.values(R.POLICY_TREES).some(t => (!t.tech || S.my.techs.includes(t.tech)) && t.policies.some(x => !S.my.policies.includes(x.id))) ? '!' : 0;
   const nav = [['bTech', 'tech', '기술'], ['bIdeo', 'ideology', '사상', canPol], ['bNation', 'stab', '국정', S && S.my.stab < 40 ? '!' : 0], ['bDip', 'handshake', '외교', inc], ['bMarket', 'scale', '시장'], ['bRank', 'crown', '순위'], ['bChat', 'chat', '채팅', chatUnread], ['bMenu', 'menu', '']];
   for (const [id, icon, label, badge] of nav) $('#' + id).innerHTML = `${ic(icon, 18)}${label ? `<span class="lbl">${label}</span>` : ''}${badge ? `<span class="badge">${badge}</span>` : ''}`;
+  $('#bAdmin').innerHTML = `${ic('eye', 18)}<span class="lbl">관리</span>`;
   $('#bStock').innerHTML = `${ic('box', 18)}`;
   $('#bStock').style.display = innerWidth < 760 ? '' : 'none';
 }
 function renderHud() {
   const p = S.players[me], my = S.my;
-  $('#hEmp').innerHTML = `<span class="sw" style="background:${p.color}"></span>${esc(p.name)}${my.prot ? ` <span title="신규 보호 ${my.prot}턴까지" style="color:var(--blue)">${ic('shield', 14)}</span>` : ''}`;
+  $('#hEmp').innerHTML = `<span class="sw" style="background:${p.color}"></span>${esc(p.name)}${my.prot ? ` <span title="신규 보호 ${my.prot}턴까지" style="color:var(--blue)">${ic('shield', 14)}</span>` : ''}${adminOn ? ' <span style="background:#7f1d1d;border:1px solid #f87171;color:#fff;border-radius:6px;padding:1px 6px;font-size:11px">관리자</span>' : ''}`;
   $('#hTurn').innerHTML = `${ic('hourglass', 15)} ${S.turn}턴 <small id="timer"></small>`;
   $('#hGold').innerHTML = `<span style="color:var(--gold)">${ic('coin', 15)}</span> ${my.gold} <small class="${my.gpt >= 0 ? 'pos' : 'neg'}">${my.gpt >= 0 ? '+' : ''}${my.gpt}</small>`;
   $('#hSci').innerHTML = `<span style="color:var(--blue)">${ic('flask', 15)}</span> <small class="pos">+${my.spt}</small>`;
@@ -697,12 +814,12 @@ function renderHud() {
   if (my.prot) { pb.style.display = 'inline-flex'; pb.innerHTML = `${ic('shield', 13)} 신규 보호 ${my.prot}턴까지`; } else pb.style.display = 'none';
   renderNav();
   const eb = $('#endBtn'), small = $('#endSmall');
-  eb.className = 'pri'; small.style.display = ''; small.innerHTML = `${ic('check', 13)} 바로 준비`;
+  eb.className = 'pri'; small.className = 'sm'; small.style.display = ''; small.innerHTML = `${ic('check', 13)} 바로 턴 넘기기`;
   if (!my.alive) { eb.innerHTML = `${ic('flag', 18)} 다시 시작`; eb.dataset.mode = 'respawn'; small.style.display = 'none'; }
   else if (p.ready) { eb.innerHTML = `${ic('hourglass', 18)} 준비 완료 · 취소`; eb.className = 'wait'; eb.dataset.mode = 'unready'; small.style.display = 'none'; }
   else {
     const w = waiting(), noQ = S.cities.find(c => c.o === me && !c.q);
-    if (w.length) { eb.innerHTML = `${ic('next', 18)} 다음 부대 (${new Set(w.map(u => u.p)).size})`; eb.dataset.mode = 'next'; }
+    if (w.length) { eb.innerHTML = `${ic('next', 18)} 다음 부대 (${new Set(w.map(u => u.p)).size})`; eb.dataset.mode = 'next'; small.className = 'skipturn'; small.innerHTML = `${ic('check', 15)} 남은 유닛 두고 턴 넘기기`; }
     else if (!my.res && R.availTechs(techsObj()).length) { eb.innerHTML = `${ic('tech', 18)} 연구 선택`; eb.dataset.mode = 'tech'; }
     else if (noQ) { eb.innerHTML = `${ic('hammer', 18)} 생산 선택`; eb.dataset.mode = 'prod'; eb.dataset.city = noQ.id; }
     else { eb.innerHTML = `${ic('check', 18)} 준비 완료`; eb.dataset.mode = 'ready'; small.style.display = 'none'; }
@@ -767,12 +884,13 @@ function stackPanel() {
   const owner = OWNER[sel.tile], c = cityAt.get(sel.tile);
   let h = panelHead(f.t, pcolor(me), mine.length > 1 ? `부대 · ${mine.length}개 유닛` : R.UNITS[f.t].name, `${c ? esc(c.name) + ' · ' : ''}${R.TERRAIN[MAP.terr[sel.tile]].name}${owner >= 0 && owner !== me ? ' · ' + esc(pname(owner)) + ' 영토' : ''}`, R.UNITS[f.t].civ);
   h += '<div class="pb">';
+  h += gotoRow();
   if (mine.length > 1) {
     const allPicked = mine.every(u => sel.picked.has(u.id));
     h += `<div class="row" style="margin-bottom:6px"><span class="mut" style="font-size:12px">체크한 유닛이 함께 이동·공격합니다</span><div class="sp"></div><button class="sm" data-act="pickall">${allPicked ? '전체 해제' : '전체 선택'}</button><button class="sm" data-act="gfort">${ic('shield', 13)} 부대 요새화</button></div>`;
     h += '<div class="ulist">' + mine.map(u => {
       const st = unitStats(u), U = st.U, col = pcolor(me);
-      const status = u.b ? '전투 중' : u.mi ? '상주 채굴 중' : u.w ? `${R.IMPS[u.w.imp].name} 건설 ${u.w.left}턴` : u.f ? '요새화' : u.s ? '대기' : u.mv > 0 ? `이동 ${u.mv}/${u.mm}` : '행동 완료';
+      const status = u.b ? '전투 중' : u.mi ? '상주 채굴 중' : u.w ? `${R.IMPS[u.w.imp].name} 건설 ${u.w.left}턴` : u.f ? '요새화' : u.hd ? '상주 대기' : u.g != null ? '목적지로 이동 중' : u.s ? '대기' : u.mv > 0 ? `이동 ${u.mv}/${u.mm}` : '행동 완료';
       return `<div class="urow ${u.id === f.id ? 'focus' : ''}" data-focus="${u.id}"><input type="checkbox" data-pick="${u.id}" ${sel.picked.has(u.id) ? 'checked' : ''}>
         <span class="tk ${U.civ ? 'civ' : ''}" style="background:${col};color:${lum(col) > 0.6 ? '#111' : '#fff'}">${ic(u.t, 16)}</span>
         <span class="nm"><b>${U.name}${u.v ? ' ' + ic('star', 11) : ''}</b><small>${status}${U.str ? ` · 공 ${st.atk} 방 ${st.def}` : ''}</small>${bar(u.hp, R.HPMAX, hpCol(u.hp))}</span></div>`;
@@ -780,6 +898,15 @@ function stackPanel() {
   }
   h += unitDetail(f);
   h += '</div>';
+  return h;
+}
+function gotoRow() {
+  const picked = pickedUnits().filter(u => !u.w); if (!picked.length) return '';
+  const g = picked.find(u => u.g != null);
+  let h = `<div class="row" style="margin-bottom:8px;gap:6px"><button class="wide ${gotoMode ? 'pri' : ''}" data-act="goto">${ic('flag', 15)} ${gotoMode ? '지도에서 목적지 칸을 누르세요 (다시 누르면 취소)' : '목적지 지정 (자동 이동)'}</button>`;
+  if (g) h += `<button data-act="nogoto">${ic('close', 14)} 예약 취소</button>`;
+  h += '</div>';
+  if (g) h += `<div class="mut" style="font-size:12px;margin:-4px 0 8px">${ic('flag', 12)} 목적지까지 ${R.dist(g.p, g.g, MAP.W)}칸 남음 · 매 턴 시작에 자동으로 이동하고, 적을 만나면 멈춥니다</div>`;
   return h;
 }
 function unitDetail(u) {
@@ -802,13 +929,20 @@ function unitDetail(u) {
     const r = MAP.res[u.p], t = MAP.terr[u.p];
     const hv = r && R.RES[r].stock ? R.STOCK[R.RES[r].stock].name : r === 'gold' ? '금 4' : t === 'forest' ? '목재' : t === 'hills' ? '석재' : null;
     const imC = IMP[u.p] && IMP[u.p] !== '.' ? R.IMP_BY_CODE[IMP[u.p]] : null;
-    if (imC && imC !== 'farm' && owner === me) { const crew = (unitsAt.get(u.p) || []).filter(x => R.UNITS[x.t].worker && x.mi).length; acts.push(`<button class="wide ${u.mi ? 'on' : ''}" data-act="mine">${ic('mine', 15)} ${u.mi ? '상주 채굴 중단' : '상주 채굴 (매 턴 +1)'} <span class="mut" style="font-size:11px">이 칸 일꾼 ${(unitsAt.get(u.p) || []).filter(x => R.UNITS[x.t].worker).length}/3 · 채굴 ${crew}</span></button>`); }
+    if (imC && imC !== 'farm' && owner === me) {
+      const here = (unitsAt.get(u.p) || []).filter(x => x.o === me && R.UNITS[x.t].worker), crew = here.filter(x => x.mi).length;
+      const grp = pickedUnits().filter(x => R.UNITS[x.t].worker && x.p === u.p);
+      const g = grp.length > 1 ? grp : [u], allOn = g.every(x => x.mi);
+      acts.push(`<button class="wide ${allOn ? 'on' : ''}" data-act="mine">${ic('mine', 15)} ${allOn ? (g.length > 1 ? `선택한 일꾼 ${g.length}명 채굴 중단` : '상주 채굴 중단') : (g.length > 1 ? `선택한 일꾼 ${g.length}명 모두 상주 채굴 (매 턴 +${g.length})` : '상주 채굴 (매 턴 +1)')} <span class="mut" style="font-size:11px">이 칸 일꾼 ${here.length}/3 · 채굴 ${crew}</span></button>`);
+    }
     if (hv) acts.push(`<button data-act="harvest" ${u.mv > 0 && !u.h && (owner < 0 || owner === me) ? '' : 'disabled'}>${ic('harvest', 15)} 채집: ${hv}</button>`);
   }
   if (!U.civ) {
     acts.push(`<button data-act="fortify">${ic('shield', 15)} ${u.f ? '요새화 해제' : '요새화'}</button>`);
     if (IMP[u.p] && IMP[u.p] !== '.' && owner >= 0 && isWar(owner)) acts.push(`<button data-act="pillage" ${u.mv > 0 ? '' : 'disabled'}>${ic('pillage', 15)} 약탈</button>`);
   }
+  { const pk = pickedUnits(), g = pk.length > 1 ? pk : [u], on = g.every(x => x.hd);
+    acts.push(`<button class="${on ? 'on' : ''}" data-act="hold" title="풀 때까지 이 칸에 계속 머뭅니다. [다음 부대] 순서에서 빠집니다">${ic('lock', 15)} ${on ? '상주 대기 해제' : '상주 대기'}</button>`); }
   acts.push(`<button data-act="skip">${ic('pause', 15)} 이번 턴 대기</button>`);
   acts.push(`<button data-act="next">${ic('next', 15)} 다음 부대</button>`);
   acts.push(`<button class="danger" data-act="disband">${ic('trash', 15)} 해산</button>`);
@@ -851,6 +985,8 @@ function cityPanel() {
   let h = panelHead('city', pcolor(c.o), `${esc(c.name)}${c.cap ? ' ' + ic('star', 13, 'goldc') : ''}`, `인구 ${c.pop} · ${esc(pname(c.o))}${c.cap ? ' · 수도' : ''}`, true);
   if (c.o !== me) {
     return h + `<div class="pb"><div class="row">${relTags(c.o)}</div><div class="kv" style="margin-top:8px;grid-template-columns:repeat(2,1fr)"><div>${ic('shield', 14)}<b>${c.str}</b>방어력</div><div>${ic('heart', 14)}<b>${c.hp}/${c.mhp}</b>체력</div></div>
+      ${c.adm && c.y ? `<div class="sec" style="color:#fca5a5">${ic('eye', 13)} 관리자 정보</div><div class="kv"><div style="color:#bef264">${ic('food', 14)}<b>${c.y.food - c.y.upkeep}</b></div><div style="color:#fdba74">${ic('prod', 14)}<b>${c.y.prod}</b></div><div style="color:var(--gold)">${ic('coin', 14)}<b>${c.y.gold}</b></div><div style="color:var(--blue)">${ic('flask', 14)}<b>${c.y.sci}</b></div><div style="color:#f0abfc">${ic('culture', 14)}<b>${c.y.cul}</b></div></div>
+      <div class="mut" style="font-size:12px;margin-top:6px">생산 중: <b style="color:var(--text)">${c.q ? qName(c.q) : '없음'}</b>${c.q ? ` ${c.prod}/${c.qc}` : ''} · 성장 ${c.food}/${c.need}<br>건물: ${(c.b || []).map(b => R.BUILDINGS[b] ? R.BUILDINGS[b].name : b).join(', ') || '없음'}${c.gv ? `<br>총독: ${R.GOVERNORS[c.gv].name}` : ''}</div>` : ''}
       <div class="mut" style="font-size:12px;margin-top:8px">${isWar(c.o) ? '부대로 공격해 체력을 0으로 만들면 근접 유닛이 점령합니다' : '공격하려면 [외교]에서 선전포고가 필요합니다'}</div></div>`;
   }
   const y = c.y, surplus = y.food - y.upkeep;
@@ -891,11 +1027,11 @@ function cityPanel() {
     const locked = Object.keys(R.EQUIP).filter(k => !eq.includes(k));
     if (locked.length) h += `<div class="sec">잠김</div><div class="mut" style="font-size:12px">${locked.map(k => `${R.EQUIP[k].name}(${R.TECHS[R.EQUIP[k].tech].name})`).join(' · ')}</div>`;
   } else if (cityTab === 'build') {
-    const bs = R.availBuildings(T, c.b);
+    const bs = R.availBuildings(T, c.b).filter(k => !R.BUILDINGS[k].coastal || isCoastal(c.p));
     h += bs.length ? '<div class="plist">' + bs.map(k => { const B = R.BUILDINGS[k]; return `<button class="pitem ${isCur('building', k)}" data-prod="building" data-type="${k}">${ic(k, 20)}<span class="nm"><b>${B.name}</b><small>${B.desc} ${resChips(B.res)}</small></span><span class="cost">${ic('prod', 12)} ${cost(B.cost)}<br>${turns(B.cost)}턴</span></button>`; }).join('') + '</div>' : '<div class="mut">지금 지을 수 있는 건물이 없습니다</div>';
     if (c.b.length) h += `<div class="sec">건설됨</div><div class="row" style="gap:5px">${c.b.map(b => `<span class="chip" title="${R.BUILDINGS[b].desc}">${ic(b, 13)} ${R.BUILDINGS[b].name}</span>`).join('')}</div>`;
   } else {
-    h += `<div class="mut" style="font-size:13px;line-height:1.8">식량 ${y.food} (인구 유지 -${y.upkeep})<br>생산 ${y.prod} · 금 ${y.gold} · 과학 ${y.sci}<br>방어력 ${c.str} · 체력 ${c.hp}/${c.mhp}<br>도시 안 유닛은 매 턴 체력 +25 회복</div>`;
+    h += `<div class="mut" style="font-size:13px;line-height:1.8">식량 ${y.food} (인구 유지 -${y.upkeep})<br>생산 ${y.prod} · 금 ${y.gold} · 과학 ${y.sci}<br>방어력 ${c.str} · 체력 ${c.hp}/${c.mhp}<br>도시 안 유닛은 매 턴 체력 +25 회복${c.gv ? `<br>${ic(R.GOVERNORS[c.gv].icon, 13)} 총독: <b>${R.GOVERNORS[c.gv].name}</b> (${R.GOVERNORS[c.gv].desc})` : '<br><span class="mut">총독 없음 — 국정 › 지배층·총독에서 임명</span>'}</div>`;
     const cc = Object.entries(S.corps || {}).filter(([, x]) => x.branches.some(br => br.id === c.id));
     if (cc.length) h += `<div class="sec">기업</div>` + cc.map(([id, x]) => `<div class="chip" style="margin:2px 0">${ic(R.CORPS[id].icon, 13)} ${R.CORPS[id].name} ${x.hq === c.id ? '본사' : '지사'} · ${esc(pname(x.owner))} ${x.active ? '' : '<span class="neg">(중단)</span>'}</div>`).join('');
     const here = myUnitsAt(c.p);
@@ -918,11 +1054,14 @@ $('#panel').addEventListener('click', e => {
     if (a === 'found') { act('found', { unit: id }); autoNext = true; }
     else if (a === 'improve') { act('improve', { unit: id }); autoNext = true; }
     else if (a === 'harvest') { act('harvest', { unit: id }); autoNext = true; }
-    else if (a === 'mine') { act('mine', { unit: id }); autoNext = true; }
+    else if (a === 'mine') { const g = picked.filter(x => R.UNITS[x.t].worker && x.p === sel.tile); act('mine', g.length > 1 ? { unit: id, units: g.map(x => x.id) } : { unit: id }); autoNext = true; }
+    else if (a === 'hold') { const g = picked.length > 1 ? picked : [unitById.get(id)].filter(Boolean); const on = !g.every(x => x.hd); act('hold', { units: g.map(x => x.id), on }); if (on) autoNext = true; }
     else if (a === 'pillage') act('pillage', { unit: id });
     else if (a === 'fortify') { act('fortify', { unit: id }); autoNext = true; }
     else if (a === 'gfort') { act('fortify', { units: picked.map(u => u.id) }); autoNext = true; }
     else if (a === 'skip') { act('skip', { unit: id }); autoNext = true; }
+    else if (a === 'goto') { gotoMode = !gotoMode; renderPanel(); dirty = true; if (gotoMode) toast('목적지 칸을 누르세요. 탐험한 곳이면 멀어도 괜찮아요'); }
+    else if (a === 'nogoto') act('nogoto', { units: picked.map(u => u.id) });
     else if (a === 'next') selectNext();
     else if (a === 'pickall') { const mine = myUnitsAt(sel.tile); const all = mine.every(u => sel.picked.has(u.id)); sel.picked = new Set(all ? [] : mine.map(u => u.id)); computeSel(); renderPanel(); dirty = true; }
     else if (a === 'disband') { if (b.dataset.sure) { act('disband', { unit: id }); } else { b.dataset.sure = 1; b.innerHTML = `${ic('trash', 15)} 정말 해산?`; } }
@@ -1031,7 +1170,7 @@ function openNation(tab) { if (tab) natTab = tab; renderNation(); $('#mNation').
 function renderNation() {
   const my = S.my, T = techsObj();
   $('#natTitle').innerHTML = `${ic('stab', 18)} 국정`;
-  $('#natTabs').innerHTML = [['stab', '안정도'], ['corp', '기업'], ['space', '우주'], ['hist', '세계 역사']].map(([k, n]) => `<button class="${natTab === k ? 'on' : ''}" data-ntab="${k}">${n}</button>`).join('');
+  $('#natTabs').innerHTML = [['stab', '안정도'], ['est', '지배층·총독'], ['cmdr', '사령관'], ['corp', '기업'], ['space', '우주'], ['hist', '세계 역사']].map(([k, n]) => `<button class="${natTab === k ? 'on' : ''}" data-ntab="${k}">${n}</button>`).join('');
   let h = '';
   if (natTab === 'stab') {
     const st = my.stab, col = st >= 60 ? 'var(--green)' : st >= 40 ? 'var(--gold)' : 'var(--red)';
@@ -1046,6 +1185,41 @@ function renderNation() {
       ${ic('flag', 13)} <b>반역(분리 독립)</b> — 수도에서 멀고 방어가 약한 도시가 새 나라로 독립해 전쟁을 겁니다<br>
       ${ic('unrest', 13)} <b>폭동</b> — 도시 인구 감소, 생산 초기화<br>
       안정도를 높이려면: 평화 유지, 문화 건물, 안정도 사상(전통·신앙·미학 등), 시대에 맞는 정부, 도시 주둔군, 기업 운영, 축제</div>`;
+  } else if (natTab === 'est') {
+    const est = my.est || {};
+    h += `<div class="mut" style="font-size:12.5px;line-height:1.7;margin-bottom:6px">나라의 정부와 정책에 따라 힘을 가진 지배층이 달라집니다. 충성도가 <b class="pos">60 이상</b>이면 영향력만큼 보너스를 주고, <b class="neg">30 미만</b>이면 안정도를 깎고 쿠데타·반역·혁명을 부추깁니다.</div>`;
+    const keys = Object.keys(est).sort((a, b) => est[b].inf - est[a].inf);
+    if (!keys.length) h += '<div class="mut">아직 지배층이 형성되지 않았습니다 (다음 턴에 갱신)</div>';
+    for (const k of keys) {
+      const E = R.ESTATES[k], e = est[k], loy = Math.round(e.loy);
+      const col = loy >= 60 ? 'var(--green)' : loy >= 30 ? 'var(--gold)' : 'var(--red)';
+      const cd = S.turn - ((my.estCd || {})[k] ?? -99) < 8;
+      const bon = Object.entries(E.bonus).map(([mk, v]) => R.modText ? R.modText({ [mk]: Math.round(v * Math.max(0.3, Math.min(1.5, e.inf / 50)) * 10) / 10 }) : '').join(' ');
+      h += `<div class="ecard" style="margin:8px 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--p2)">
+        <div class="row" style="align-items:center;gap:8px">${ic(E.icon, 20, col)}<b style="font-size:15px">${E.name}</b><span class="mut" style="font-size:12px">${E.desc}</span><div class="sp"></div><span class="mut" style="font-size:12px">영향력</span><b>${e.inf}</b></div>
+        <div class="row" style="align-items:center;gap:8px;margin-top:6px"><span style="width:70px;font-size:12px">충성 <b style="color:${col}">${loy}</b></span><div style="flex:1">${bar(loy, 100, col)}</div><span class="mut" style="font-size:11px">목표 ${e.tgt} ${e.tgt > loy ? '▲' : e.tgt < loy ? '▼' : ''}</span></div>
+        <div style="font-size:12px;margin-top:5px"><span class="${loy >= 60 ? 'pos' : 'mut'}">보너스: ${bon || '-'}</span>${loy < 30 ? ` <span class="neg">· 위험: ${E.risk}</span>` : ''}</div>
+        <div class="row" style="gap:6px;margin-top:7px"><button data-priv="${k}" ${cd || my.gold < my.estCost ? 'disabled' : ''}>${ic('coin', 13)} 특권 부여 (금 ${my.estCost})</button><button data-curb="${k}" ${cd ? 'disabled' : ''}>${ic('lock', 13)} 견제</button>${cd ? `<span class="mut" style="font-size:11px">${my.estCd[k] + 8 - S.turn}턴 후 가능</span>` : ''}</div></div>`;
+    }
+    const cs = S.cities.filter(c => c.o === me), used = cs.filter(c => c.gv).length;
+    h += `<div class="sec">총독 <span class="mut" style="font-weight:400">${used}/${my.govSlots}명 · 임명 금 ${my.govCost} · 유지비 턴당 2</span></div>`;
+    h += `<div class="mut" style="font-size:12px;margin-bottom:6px">총독 자리: 기본 1 + 시대 2개마다 1 + 군주정·봉건제·전제정·공산주의 1 + 전통 정책 3개 이상 1</div>`;
+    h += `<table class="mtable">${cs.map(c => `<tr><td><b>${esc(c.name)}</b> <span class="mut">인구 ${c.pop}</span></td><td>${c.gv ? `${ic(R.GOVERNORS[c.gv].icon, 13)} ${R.GOVERNORS[c.gv].name} <button data-recall="${c.id}" style="padding:2px 8px">해임</button>` : `<select data-gvsel="${c.id}">${Object.entries(R.GOVERNORS).map(([gk, G]) => `<option value="${gk}">${G.name} — ${G.desc}</option>`).join('')}</select> <button data-appoint="${c.id}" ${used >= my.govSlots || my.gold < my.govCost ? 'disabled' : ''} style="padding:2px 8px">임명</button>`}</td></tr>`).join('')}</table>`;
+  } else if (natTab === 'cmdr') {
+    const cm = my.cmdr;
+    h += `<div class="mut" style="font-size:12.5px;line-height:1.7;margin-bottom:8px">사령관은 내가 직접 싸우지 않거나 <b>오프라인일 때</b> 매 턴 군대를 대신 움직여 전투를 벌입니다. 전투에서 이길수록 레벨이 오르고(최대 5) 레벨마다 공격·방어 +2%. 유지비는 턴당 금 2+레벨.</div>`;
+    if (cm) {
+      const need = [0, 3, 7, 12, 18, 18][cm.lvl];
+      h += `<div class="ecard" style="padding:12px;border:1px solid var(--gold);border-radius:12px;background:var(--p2)">
+        <div class="row" style="align-items:center;gap:10px">${ic('swords', 26, '#f0c35a')}<div><b style="font-size:17px">${esc(cm.name)}</b> <span class="chip">Lv ${cm.lvl}</span><div class="mut" style="font-size:12px">${cm.traits.map(t => `<b style="color:var(--text)">${R.CMDR_TRAITS[t].name}</b> ${R.CMDR_TRAITS[t].desc}`).join(' · ')}</div></div><div class="sp"></div><button data-firecm="1">해임</button></div>
+        <div style="margin-top:8px;font-size:12px">경험 ${cm.xp}${cm.lvl < 5 ? ` / ${need}` : ' (최고 레벨)'}</div>${bar(cm.lvl < 5 ? cm.xp : 1, cm.lvl < 5 ? need : 1, '#f0c35a')}
+        <div class="sec">언제 지휘할까요</div><div class="row" style="gap:6px">${Object.entries(R.CMDR_MODE).map(([k, n]) => `<button class="${cm.mode === k ? 'pri' : ''}" data-cmode="${k}">${n}</button>`).join('')}</div>
+        <div class="sec">작전 방침</div><div class="row" style="gap:6px">${Object.entries(R.CMDR_STANCE).map(([k, v]) => `<button class="${cm.stance === k ? 'pri' : ''}" data-cstance="${k}" title="${v.desc}">${v.name}</button>`).join('')}</div>
+        <div class="mut" style="font-size:12px;margin-top:4px">${R.CMDR_STANCE[cm.stance] ? R.CMDR_STANCE[cm.stance].desc : ''}</div>
+        <div class="row" style="margin-top:10px"><button class="pri" data-cmnow="1" ${cm.nowTurn === S.turn ? 'disabled' : ''}>${ic('play', 14)} 이번 턴 군대를 맡기기</button><span class="mut" style="font-size:12px">전투 화면의 [사령관 위임]은 그 전투만 맡깁니다</span></div></div>`;
+    } else h += `<div class="hint">${ic('swords', 16)} 아직 사령관이 없습니다. 아래 후보 중 한 명을 임명하세요.</div>`;
+    h += `<div class="sec">후보 <span class="mut" style="font-weight:400">20턴마다 새 후보 · 임명 금 ${my.cmdrCost}${cm ? ' · 임명하면 지금 사령관과 교체' : ''}</span></div>`;
+    h += (my.cmdrPool || []).map((c, idx) => `<div class="row" style="align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)">${ic('swords', 18)}<div style="flex:1"><b>${esc(c.name)}</b><div class="mut" style="font-size:12px">${c.traits.map(t => `${R.CMDR_TRAITS[t].name}(${R.CMDR_TRAITS[t].desc})`).join(' · ')}</div></div><button class="pri" data-hire="${idx}" ${my.gold < my.cmdrCost ? 'disabled' : ''}>임명</button></div>`).join('') || '<div class="mut">후보가 없습니다. 다음 교체를 기다리세요.</div>';
   } else if (natTab === 'corp') {
     h += `<div class="mut" style="font-size:12px;margin-bottom:10px">기업은 세계에 하나씩만 세울 수 있습니다. 본사를 세우면 매 턴 원료를 쓰고, 지사가 있는 도시에 효과를 주며, 지사 1곳당 금 +2(해외 지사는 +4)를 벌어요. 해외 진출에는 상대와 국경 개방·동맹·교역 협정 중 하나가 필요하고, 상대는 지사를 국유화할 수 있어요. 본사 도시를 점령하면 기업도 넘어갑니다.</div><div class="dl">`;
     const myCities = S.cities.filter(c => c.o === me);
@@ -1082,6 +1256,15 @@ $('#natTabs').onclick = e => { const b = e.target.closest('[data-ntab]'); if (b)
 $('#natBody').onclick = e => {
   const b = e.target.closest('button'); if (!b) return;
   if (b.dataset.fest) act('festival');
+  if (b.dataset.priv) act('privilege', { estate: b.dataset.priv });
+  if (b.dataset.curb) { if (b.dataset.sure) act('curb', { estate: b.dataset.curb }); else { b.dataset.sure = 1; b.textContent = '정말 견제?'; return; } }
+  if (b.dataset.appoint) { const sl = $('#natBody').querySelector(`select[data-gvsel="${b.dataset.appoint}"]`); act('appoint', { city: +b.dataset.appoint, type: sl.value }); }
+  if (b.dataset.recall) act('recall', { city: +b.dataset.recall });
+  if (b.dataset.hire) act('hireCmdr', { idx: +b.dataset.hire });
+  if (b.dataset.firecm) { if (b.dataset.sure) act('fireCmdr'); else { b.dataset.sure = 1; b.textContent = '정말?'; return; } }
+  if (b.dataset.cmode) act('cmdrSet', { mode: b.dataset.cmode });
+  if (b.dataset.cstance) act('cmdrSet', { stance: b.dataset.cstance });
+  if (b.dataset.cmnow) act('cmdrNow');
   if (b.dataset.found) { const sel2 = $('#natBody').querySelector(`select[data-corpcity="${b.dataset.found}"]`); if (sel2) act('corpFound', { corp: b.dataset.found, city: +sel2.value }); }
   if (b.dataset.branch) { const sel2 = $('#natBody').querySelector(`select[data-brcity="${b.dataset.branch}"]`); if (sel2) act('corpBranch', { corp: b.dataset.branch, city: +sel2.value }); }
   if (b.dataset.nat) { const [cid, city] = b.dataset.nat.split(':'); if (b.dataset.sure) act('nationalize', { corp: cid, city: +city }); else { b.dataset.sure = 1; b.textContent = '정말?'; } }
@@ -1207,6 +1390,58 @@ function renderMarket() {
 $('#mktBody').onclick = e => { const b = e.target.closest('[data-mk]'); if (b) act('market', { res: b.dataset.mk, side: b.dataset.side, n: +b.dataset.n }); };
 
 // ───────── 순위·메뉴 ─────────
+function qName(q) {
+  if (!q) return '';
+  const T = q.kind === 'unit' ? R.UNITS : q.kind === 'building' ? R.BUILDINGS : q.kind === 'equip' ? R.EQUIP : q.kind === 'project' ? R.PROJECTS : null;
+  return T && T[q.type] ? T[q.type].name : q.type === 'wealth' ? '부 생산' : q.type === 'research' ? '연구 생산' : q.type;
+}
+function renderAdmBox() {
+  const b = $('#admBox'); if (!b) return;
+  if (adminOn) b.innerHTML = `<div class="row" style="gap:6px"><button class="wide" id="admOpen">${ic('eye', 15)} 관리자 화면</button><button id="admOff" class="danger">끄기</button></div>`;
+  else b.innerHTML = `<div class="mut" style="font-size:12px;margin-bottom:6px">${ic('lock', 12)} 관리자 코드 (서버 ADMIN_CODE)</div><div class="row" style="gap:6px"><input id="admCode" type="password" autocomplete="off" placeholder="코드 입력" style="flex:1;min-width:0"><button id="admGo">확인</button></div>`;
+  const go = () => { const v = $('#admCode').value; if (!v) return; sendMsg({ t: 'admin', code: v }); $('#admCode').value = ''; };
+  if ($('#admGo')) { $('#admGo').onclick = go; $('#admCode').onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') go(); }; }
+  if ($('#admOpen')) $('#admOpen').onclick = () => { $('#mMenu').classList.remove('on'); openAdmin(); };
+  if ($('#admOff')) $('#admOff').onclick = () => sendMsg({ t: 'admin', off: true });
+}
+function openAdmin() { renderAdmin(); $('#mAdmin').classList.add('on'); }
+function renderAdmin() {
+  const A = S && S.adm; if (!A) { $('#admBody').innerHTML = '<div class="mut">불러오는 중…</div>'; return; }
+  $('#admTitle').innerHTML = `${ic('eye', 18)} 관리자 화면 <span class="mut" style="font-size:13px;font-weight:400">${S.turn}턴</span>`;
+  const P = id => S.players[id] || {};
+  const nm = id => `<span class="sw" style="background:${P(id).color};width:12px;height:12px;display:inline-block;border-radius:3px;vertical-align:-1px"></span> ${esc(P(id).name || '?')}`;
+  let h = `<div class="kv" style="grid-template-columns:repeat(auto-fit,minmax(96px,1fr));margin-bottom:10px"><div>${ic('users', 14)}<b>${A.online}</b>접속</div><div>${ic('crown', 14)}<b>${A.players.filter(q => q.alive).length}</b>생존 국가</div><div>${ic('city', 14)}<b>${A.cities}</b>도시</div><div>${ic('swords', 14)}<b>${A.units}</b>유닛</div><div>${ic('atk', 14)}<b>${A.battles}</b>진행 전투</div><div>${ic('handshake', 14)}<b>${A.deals}</b>무역 협정</div></div>`;
+  h += `<div class="tabs">${[['nations', '국가 현황'], ['rels', '전쟁·동맹'], ['stock', '자원 보유']].map(([k, n]) => `<button class="${admTab === k ? 'on' : ''}" data-admtab="${k}">${n}</button>`).join('')}</div>`;
+  const list = A.players.filter(q => q.alive || q.cities).slice();
+  if (admTab === 'nations') {
+    const cols = [['name', '국가'], ['score', '점수'], ['cities', '도시'], ['pop', '인구'], ['mil', '군대'], ['power', '군사력'], ['gold', '금'], ['techs', '기술'], ['stab', '안정'], ['culture', '문화'], ['gov', '정부'], ['cmdr', '사령관'], ['est', '지배층 (충성/영향)']];
+    const key = admSort;
+    list.sort((a, b) => key === 'name' ? String(P(a.id).name).localeCompare(P(b.id).name) : (typeof a[key] === 'number' ? b[key] - a[key] : 0));
+    h += `<div class="mut" style="font-size:12px;margin:6px 0">줄을 누르면 그 나라 수도로 이동합니다 · 머리글을 누르면 정렬</div><table class="mtable admtbl"><tr>${cols.map(([k, n]) => `<th data-admsort="${k}" style="cursor:pointer">${n}${admSort === k ? ' ▼' : ''}</th>`).join('')}</tr>`;
+    h += list.map(q => `<tr class="r" data-admgo="${q.cap}"><td>${nm(q.id)} ${q.ai ? '<span class="tag ai">AI</span>' : q.online ? '<span class="tag on">접속</span>' : '<span class="mut" style="font-size:11px">오프라인</span>'}${q.rebel ? ' <span class="neg" style="font-size:11px">반군</span>' : ''}${!q.alive ? ' <span class="neg">멸망</span>' : ''}${q.launched ? ' ' + ic('rocket', 12) : ''}</td>
+      <td><b>${q.score}</b></td><td>${q.cities}</td><td>${q.pop}</td><td>${q.mil}<span class="mut">/${q.units}</span></td><td>${q.power}</td><td>${q.gold} <small class="${q.gpt >= 0 ? 'pos' : 'neg'}">${q.gpt >= 0 ? '+' : ''}${q.gpt}</small></td>
+      <td>${q.techs} <small class="mut">${R.ERAS[q.era] || ''}${q.res && R.TECHS[q.res] ? ' · ' + R.TECHS[q.res].name : ''}</small></td>
+      <td style="color:${q.stab >= 60 ? 'var(--green)' : q.stab >= 40 ? 'var(--gold)' : 'var(--red)'}"><b>${q.stab}</b></td><td>${q.culture} <small class="mut">정책 ${q.policies}</small></td>
+      <td>${R.GOVS[q.gov] ? R.GOVS[q.gov].name : q.gov || '-'}</td><td>${q.cmdr ? esc(q.cmdr) : '<span class="mut">-</span>'}</td>
+      <td style="font-size:12px">${q.est.map(([k, l, inf]) => `<span style="color:${l >= 60 ? 'var(--green)' : l >= 30 ? 'var(--gold)' : 'var(--red)'}">${R.ESTATES[k] ? R.ESTATES[k].name : k} ${l}/${inf}</span>`).join(' · ') || '-'}</td></tr>`).join('');
+    h += '</table>';
+  } else if (admTab === 'rels') {
+    const wars = A.rels.filter(r => r[2] >= 0), alls = A.rels.filter(r => r[2] < 0);
+    h += `<div class="sec">${ic('swords', 14)} 진행 중인 전쟁 (${wars.length})</div>` + (wars.map(([a, b, t]) => `<div class="civrow" style="grid-template-columns:1fr auto 1fr auto"><div>${nm(a)}</div><b class="neg">VS</b><div>${nm(b)}</div><span class="mut">${t ? S.turn - t + '턴째' : ''}</span></div>`).join('') || '<div class="mut">전쟁이 없습니다</div>');
+    h += `<div class="sec">${ic('handshake', 14)} 동맹 (${alls.length})</div>` + (alls.map(([a, b]) => `<div class="civrow" style="grid-template-columns:1fr auto 1fr"><div>${nm(a)}</div><b class="pos">동맹</b><div>${nm(b)}</div></div>`).join('') || '<div class="mut">동맹이 없습니다</div>');
+  } else {
+    const ks = Object.keys(R.STOCK);
+    h += `<table class="mtable admtbl"><tr><th>국가</th>${ks.map(k => `<th><span style="color:${R.STOCK[k].color}">${ic(k, 13)}</span> ${R.STOCK[k].name}</th>`).join('')}</tr>` + list.map(q => `<tr class="r" data-admgo="${q.cap}"><td>${nm(q.id)}</td>${ks.map(k => `<td>${q.stock[k] || 0}</td>`).join('')}</tr>`).join('') + '</table>';
+  }
+  $('#admBody').innerHTML = h;
+}
+$('#admBody').onclick = e => {
+  const t = e.target.closest('[data-admtab],[data-admsort],[data-admgo]'); if (!t) return;
+  if (t.dataset.admtab) { admTab = t.dataset.admtab; renderAdmin(); }
+  else if (t.dataset.admsort) { admSort = t.dataset.admsort; renderAdmin(); }
+  else if (t.dataset.admgo != null && +t.dataset.admgo >= 0) { $('#mAdmin').classList.remove('on'); centerOn(+t.dataset.admgo); cam.z = Math.max(cam.z, 0.9); clampCam(); dirty = true; }
+};
+$('#bAdmin').onclick = openAdmin;
 function renderRank() {
   $('#rankTitle').innerHTML = `${ic('crown', 18)} 세계 순위`;
   const list = S.players.filter(q => !q.removed && q.alive).sort((a, b) => b.score - a.score);
@@ -1224,7 +1459,7 @@ $('#chatX').innerHTML = ic('close', 16);
 $('#chatX').onclick = () => $('#chatPanel').classList.remove('on');
 $('#gChatSend').onclick = () => sendChat($('#gChatIn'));
 $('#gChatIn').onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') sendChat($('#gChatIn')); };
-$('#bMenu').onclick = () => $('#mMenu').classList.add('on');
+$('#bMenu').onclick = () => { renderAdmBox(); $('#mMenu').classList.add('on'); };
 $('#mCenter').innerHTML = `${ic('city', 16)} 수도로 이동`;
 $('#mLogBtn').innerHTML = `${ic('scroll', 16)} 전체 기록`;
 $('#mMiniBtn').innerHTML = `${ic('map', 16)} 미니맵 켜기/끄기`;
@@ -1345,7 +1580,7 @@ function renderBattleUI() {
   } else if (b.mine) {
     h += `<div class="hint">${ic(TAC_ICON[b.hint] || 'eye', 18)} 정찰 보고: 적 지휘관은 <b>${R.TACTICS[b.hint].name}</b>을(를) 즐겨 씁니다</div>`;
     h += `<div class="tacs">${Object.keys(R.TACTICS).map(k => `<button class="tac" data-tac="${k}"><b>${ic(TAC_ICON[k], 18)} ${R.TACTICS[k].name}</b><small>${R.TACTICS[k].desc}</small></button>`).join('')}</div>
-      <div class="row" style="margin-top:8px"><button data-tac="retreat">${ic('retreat', 15)} 후퇴</button><div class="sp"></div><button data-tac="auto">${ic('play', 15)} 자동 전투</button></div>`;
+      <div class="row" style="margin-top:8px"><button data-tac="retreat">${ic('retreat', 15)} 후퇴</button><div class="sp"></div><button data-tac="auto">${ic(S.my.cmdr ? 'swords' : 'play', 15)} ${S.my.cmdr ? `사령관 위임 (${esc(S.my.cmdr.name)})` : '자동 전투'}</button></div>`;
   } else h += `<div class="hint">${ic('shield', 18)} 우리 영토가 공격받고 있습니다. 상대가 전술을 고르는 중…</div><div class="row" style="justify-content:flex-end;margin-top:10px"><button id="btlClose">닫기</button></div>`;
   $('#btlUI').innerHTML = h;
 }
@@ -1372,7 +1607,9 @@ document.addEventListener('keydown', e => {
   else if (sel && sel.kind === 'stack') {
     if (k === 'f') { act('fortify', { units: pickedUnits().map(u => u.id) }); autoNext = true; }
     if (k === 'b') { act('found', { unit: sel.focus }); autoNext = true; }
+    if (k === 'h') { const g = pickedUnits(); if (g.length) { const on = !g.every(x => x.hd); act('hold', { units: g.map(x => x.id), on }); if (on) autoNext = true; } }
     if (k === 's') { act('skip', { units: pickedUnits().map(u => u.id) }); autoNext = true; }
+    if (k === 'g') { gotoMode = !gotoMode; renderPanel(); dirty = true; if (gotoMode) toast('목적지 칸을 누르세요'); }
     if (k === 'i') { act('improve', { unit: sel.focus }); autoNext = true; }
   }
   const pan = 80 / cam.z;
