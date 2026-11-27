@@ -10,8 +10,8 @@ const R = require('./public/rules.js');
 const PORT = process.env.PORT || 3000;
 const PUB = path.join(__dirname, 'public');
 const CFG = {
-  W: +process.env.WORLD_W || 96,                   // 월드 가로 칸 수
-  H: +process.env.WORLD_H || 64,                   // 월드 세로 칸 수
+  W: +process.env.WORLD_W || 120,                   // 월드 가로 칸 수
+  H: +process.env.WORLD_H || 76,                   // 월드 세로 칸 수
   TURN_SECONDS: +process.env.TURN_SECONDS || 30,   // 월드 턴 간격 (초)
   AI_COUNT: process.env.AI_COUNT != null ? +process.env.AI_COUNT : 6, // 항상 유지할 AI 문명 수
   PROTECT_TURNS: +process.env.PROTECT_TURNS || 60, // 신규 보호 턴
@@ -99,18 +99,24 @@ function genMap(W, H, seed) {
     };
   }
   const e1 = layer(15), e2 = layer(7), e3 = layer(2.8), m1 = layer(9), m2 = layer(3.8);
-  const elev = new Float32Array(N), moist = new Float32Array(N);
+  const elev = new Float32Array(N), moist = new Float32Array(N), cOff = (rnd() - 0.5) * 0.25, rough = new Float32Array(N);
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const px = x + 0.5 * (y & 1), i = y * W + x;
     let e = e1(px, y) * 0.55 + e2(px, y) * 0.3 + e3(px, y) * 0.15;
     const nx = (px / W) * 2 - 1, ny = (y / H) * 2 - 1;
-    e -= Math.pow(Math.max(Math.abs(nx), Math.abs(ny)), 3) * 0.5;
+    // 대륙 두 개: 왼쪽·오른쪽 큰 땅덩이, 가운데는 대양
+    const c1 = Math.hypot((nx + 0.47) / 0.42, (ny - cOff) / 0.78), c2 = Math.hypot((nx - 0.47) / 0.42, (ny + cOff) / 0.78);
+    const cd = Math.min(c1, c2);
+    rough[i] = e;
+    e = e * 0.8 + (1 - cd) * 0.55;
+    if (Math.abs(nx) < 0.07) e -= 0.35 * (1 - Math.abs(nx) / 0.07);
+    e -= Math.pow(Math.max(Math.abs(nx), Math.abs(ny)), 4) * 0.4;
     elev[i] = e; moist[i] = m1(px, y) * 0.65 + m2(px, y) * 0.35;
   }
   const sorted = Array.from(elev).sort((a, b) => a - b);
-  const sea = sorted[Math.floor(N * (+process.env.SEA_RATIO || 0.52))];
+  const sea = sorted[Math.floor(N * (+process.env.SEA_RATIO || 0.56))];
   const land = []; for (let i = 0; i < N; i++) if (elev[i] >= sea) land.push(i);
-  const le = land.map(i => elev[i]).sort((a, b) => a - b);
+  const le = land.map(i => rough[i] + elev[i] * 0.3).sort((a, b) => a - b);
   const mtn = le[Math.floor(le.length * 0.95)], hill = le[Math.floor(le.length * 0.83)];
   const lm = land.map(i => moist[i]).sort((a, b) => a - b);
   const q = p => lm[Math.floor(lm.length * p)];
@@ -119,8 +125,9 @@ function genMap(W, H, seed) {
   for (const i of land) {
     const y = (i / W) | 0, lat = Math.abs((y / H) * 2 - 1);
     let t;
-    if (elev[i] >= mtn) t = 'mountain';
-    else if (elev[i] >= hill) t = 'hills';
+    const rg = rough[i] + elev[i] * 0.3;
+    if (rg >= mtn) t = 'mountain';
+    else if (rg >= hill) t = 'hills';
     else if (lat > 0.86) t = 'tundra';
     else if (moist[i] < mDes && lat < 0.6) t = 'desert';
     else if (moist[i] < mPla) t = 'plains';
@@ -181,6 +188,9 @@ class World {
       this.rels = {}; this.deals = []; this.props = []; this.corps = {}; this.history = [];
       this.market = { stock: Object.fromEntries(STOCK_KEYS.map(k => [k, MARKET_TARGET])) };
     }
+    if (!this.planets) this.planets = this.genPlanets();
+    for (const k in R.PLANETS) if (!this.planets[k]) this.planets[k] = this.genPlanets()[k];
+    this.voyages = this.voyages || [];
     this.claim = new Int32Array(this.N).fill(-1);
     this.shallow = R.shallowMap(this.terr, this.W, this.H);
     this.turnStart = Date.now();
@@ -193,8 +203,8 @@ class World {
   // ── 저장/불러오기 ──
   serialize() {
     return JSON.stringify({
-      v: 5, W: this.W, H: this.H, seed: this.seed, terr: this.terr, res: this.res, imp: this.imp, turn: this.turn, nextId: this.nextId, created: this.created,
-      rels: this.rels, deals: this.deals, props: this.props, market: this.market, corps: this.corps, history: this.history,
+      v: 6, W: this.W, H: this.H, seed: this.seed, terr: this.terr, res: this.res, imp: this.imp, turn: this.turn, nextId: this.nextId, created: this.created,
+      rels: this.rels, deals: this.deals, props: this.props, market: this.market, corps: this.corps, history: this.history, planets: this.planets, voyages: this.voyages,
       players: this.players.map(p => {
         const o = {}; for (const k of Object.keys(p)) if (!k.startsWith('_') && !['ws', 'visible', 'baseVis', 'explored', 'sentFog', 'sentOwner', 'sentImp'].includes(k)) o[k] = p[k];
         o.explored = Buffer.from(p.explored || new Uint8Array(this.N)).toString('base64'); return o;
@@ -205,7 +215,7 @@ class World {
   load(s) {
     this.W = s.W; this.H = s.H; this.N = s.W * s.H; this.seed = s.seed; this.terr = s.terr; this.res = s.res; this.imp = s.imp;
     this.turn = s.turn; this.nextId = s.nextId; this.created = s.created || Date.now();
-    this.rels = s.rels || {}; this.deals = s.deals || []; this.props = s.props || []; this.market = s.market; this.corps = s.corps || {}; this.history = s.history || [];
+    this.rels = s.rels || {}; this.deals = s.deals || []; this.props = s.props || []; this.market = s.market; this.corps = s.corps || {}; this.history = s.history || []; this.planets = s.planets || null; this.voyages = s.voyages || [];
     this.players = s.players.map(p => Object.assign(p, { explored: new Uint8Array(Buffer.from(p.explored, 'base64')), visible: new Uint8Array(this.N), baseVis: new Uint8Array(this.N), ws: null, ready: false }));
     for (const u of s.units) this.units.set(u.id, u);
     for (const c of s.cities) { this.cities.set(c.id, c); this.cityAt.set(c.pos, c); }
@@ -222,7 +232,54 @@ class World {
   unitsAt(i) { const out = []; for (const u of this.units.values()) if (u.pos === i) out.push(u); return out; }
   occMap() { const m = new Map(); for (const u of this.units.values()) { let a = m.get(u.pos); if (!a) m.set(u.pos, a = []); a.push(u); } return m; }
   isMil(u) { return !R.UNITS[u.type].civ; }
-  maxMoves(u) { return R.UNITS[u.type].moves + (u.eq && u.eq.mount ? R.EQUIP[u.eq.mount].mv : 0); }
+  maxMoves(u) { const U = R.UNITS[u.type]; return U.moves + (u.eq && u.eq.mount ? R.EQUIP[u.eq.mount].mv : 0) + (U.sea ? (this.M(this.players[u.owner]).seaMove || 0) : 0); }
+  isSea(u) { return !!R.UNITS[u.type].sea; }
+  isAir(u) { return !!R.UNITS[u.type].air; }
+  seaPort(pid, i) { const c = this.cityAt.get(i); return !!c && this.friendly(pid, c.owner) && this.coastal(c); }
+  passFor(u) { return this.isSea(u) ? (i => this.terr[i] === 'ocean' || this.seaPort(u.owner, i)) : (i => this.passable(u.owner, i)); }
+  cargoUsed(c) { let n = 0; for (const x of this.units.values()) if (x.ship === c.id) n++; return n; }
+  airBases(u) {
+    const out = new Map(), U = R.UNITS[u.type], rr = U.range * 2;
+    for (const c of this.citiesOf(u.owner)) if (c.pos !== u.pos && R.dist(c.pos, u.pos, this.W) <= rr) out.set(c.pos, 0);
+    for (const x of this.units.values()) if (x.owner === u.owner && R.UNITS[x.type].cargo && x.pos !== u.pos && !this.cityAt.has(x.pos) && R.dist(x.pos, u.pos, this.W) <= rr && this.cargoUsed(x) < R.UNITS[x.type].cargo) out.set(x.pos, 0);
+    return out;
+  }
+  // 유닛 이동 (항공모함은 실은 항공기를 데리고 감)
+  relocate(u, to, rem, occ) {
+    const from = u.pos;
+    const mv = x => { if (occ) { const a = occ.get(x.pos); if (a) occ.set(x.pos, a.filter(y => y !== x)); if (!occ.get(to)) occ.set(to, []); occ.get(to).push(x); } x.pos = to; };
+    mv(u); u.moves = rem; u.acted = true; u.fort = false; u.work = null;
+    if (R.UNITS[u.type].cargo) for (const a of this.units.values()) if (a.ship === u.id && a.pos === from) mv(a);
+    if (this.isAir(u)) {
+      u.ship = null; u.moves = 0;
+      if (!this.cityAt.has(to)) { const cr = [...this.units.values()].find(x => x.pos === to && x.owner === u.owner && R.UNITS[x.type].cargo && this.cargoUsed(x) < R.UNITS[x.type].cargo); u.ship = cr ? cr.id : null; }
+    }
+  }
+  seaField(sources, pid, maxD) {
+    const N = this.N, d = new Float32Array(N).fill(1e9), q = [];
+    for (const s0 of sources) { d[s0] = 0; q.push(s0); }
+    for (let h = 0; h < q.length; h++) {
+      const c = q[h]; if (d[c] >= (maxD || 60)) continue;
+      for (const n of R.neighbors(c, this.W, this.H)) if (d[n] > d[c] + 1 && (this.terr[n] === 'ocean' || this.seaPort(pid, n))) { d[n] = d[c] + 1; q.push(n); }
+    }
+    return d;
+  }
+  // 선전포고 없이 공격 → 기습 전쟁
+  surpriseWar(pid, o) {
+    if (this.atWar(pid, o)) return;
+    const p = this.players[pid], q = this.players[o];
+    if (this.protectedP(pid)) p.protectUntil = this.turn;
+    this.declareWar(pid, o);
+    this.addHistory(`기습! [${p.name}]이(가) 선전포고 없이 [${q ? q.name : '?'}]을(를) 공격했습니다`);
+    for (const x of this.alivePlayers()) if (x.id !== pid && x.met && x.met[pid]) this.addMod(x, pid, 'war', x.id === o ? -40 : -12);
+    this.claimsDirty = true;
+  }
+  hostileOwners(pid, j) {
+    const s2 = new Set(); const c = this.cityAt.get(j); if (c && c.owner !== pid) s2.add(c.owner);
+    for (const x of this.units.values()) if (x.pos === j && x.owner !== pid && !this.isAir(x)) s2.add(x.owner);
+    return s2;
+  }
+  canSurprise(pid, o) { return !this.allied(pid, o) && !this.protectedP(o) && this.players[pid].met[o]; }
   M(p) {
     if (!p || !p.techs) return {};
     const key = Object.keys(p.techs).length + '|' + (p.policies || []).length + '|' + p.gov + '|' + (p.launched ? 1 : 0) + '|' + (p.space && p.space.satellite ? 1 : 0) + '|' + (p.estKey || '');
@@ -299,7 +356,28 @@ class World {
     const u = { id: this.nextId++, owner, type, pos, hp: R.HPMAX, moves: R.UNITS[type].moves, fort: false, attacked: false, acted: false, vet: !!vet, eq: {} };
     this.units.set(u.id, u); return u;
   }
-  killUnit(u) { this.units.delete(u.id); }
+  killUnit(u) {
+    this.units.delete(u.id);
+    if (R.UNITS[u.type] && R.UNITS[u.type].cargo) for (const a of [...this.units.values()]) if (a.ship === u.id) this.units.delete(a.id);
+    const o = this.players[u.owner];
+    if (o && o.alive && this.isMil(u) && this.alivePlayers().some(q => q.id !== o.id && this.atWar(o.id, q.id))) o.warLoss = (o.warLoss || 0) + 1;
+  }
+  addTurmoil(p, v) { if (p) p.turmoil = clamp((p.turmoil || 0) + v, 0, 100); }
+  // 격변은 기술을 앞당기고, 오래 이어진 평화와 풍요는 기술을 멈추게 한다
+  sciFactors(p) {
+    const parts = [];
+    const tur = p.turmoil || 0;
+    if (tur > 0) parts.push(['격변 (전쟁·혁명·쿠데타)', Math.round(tur * 0.9)]);
+    const peace = this.turn - Math.max(p.lastWarTurn || -99, p.joinTurn || 0, p.lastEvent || -99);
+    const st = p.stab == null ? 70 : p.stab;
+    if (peace > 8) {
+      const calm = Math.min(this.techEra(p) === 0 ? 30 : 65, (peace - 8) * 1.8) * (st >= 65 ? 1 : st >= 45 ? 0.6 : 0.25);
+      if (calm >= 1) parts.push([`안락한 평화 (${peace}턴째)`, -Math.round(calm)]);
+    }
+    if (p.gold > 1500 && st >= 60) parts.push(['풍요로운 안주', -Math.min(10, Math.floor(p.gold / 800))]);
+    const pct = clamp(parts.reduce((a, b) => a + b[1], 0), -70, 90);
+    return { pct, parts, mult: 1 + pct / 100 };
+  }
   msgTo(pids, text) {
     for (const pid of new Set(pids)) {
       const p = this.players[pid]; if (!p || p.removed || p.isAI) continue;
@@ -403,7 +481,14 @@ class World {
     add('정부·사상', Math.min(25, m.stability || 0));
     const wars = this.alivePlayers().filter(q => q.id !== p.id && this.atWar(p.id, q.id)).length;
     const bloc = R.GOVS[p.gov] && R.GOVS[p.gov].bloc;
-    add('전쟁 피로', -wars * (bloc === 'free' ? 8 : 4));
+    { let weary = 0;
+      for (const q of this.alivePlayers()) if (q.id !== p.id && this.atWar(p.id, q.id)) {
+        const len = this.turn - this.rel(p.id, q.id).warTurn;
+        weary += (bloc === 'free' ? 16 : bloc === 'old' ? 11 : 9) + Math.min(24, len * 0.6);
+      }
+      if (wars > 1) weary *= 1 + (wars - 1) * 0.25;
+      add('전쟁 피로', -weary);
+      add('전사자', -Math.min(25, (p.warLoss || 0) * 1.5)); }
     add('제국 규모', -Math.max(0, cs.length - 4) * 2 - Math.max(0, cs.length - 10));
     add('점령지 불만', -1.5 * cs.filter(c => c.founder !== p.id).length);
     const gap = this.techEra(p) - (R.GOVS[p.gov] ? R.GOVS[p.gov].era : 0) - 1;
@@ -421,7 +506,7 @@ class World {
     p.stabParts = parts;
     p.stabT = clamp(parts.reduce((a, b) => a + b[1], 0), 0, 100);
     const cur = p.stab == null ? 70 : p.stab;
-    p.stab = cur + clamp(p.stabT - cur, -4, 4);
+    p.stab = cur + clamp(p.stabT - cur, wars ? -9 : -4, 4);
   }
   stabilityEvents(p) {
     if (!p.alive || p.rebel && this.turn - p.joinTurn < 20) return;
@@ -442,6 +527,7 @@ class World {
     for (const k in w) { r -= w[k]; if (r <= 0) { ev = k; break; } }
     p.lastEvent = this.turn;
     if (ev === 'riot') {
+      this.addTurmoil(p, 10);
       const c = cs[Math.floor(this.rnd() * cs.length)];
       c.pop = Math.max(1, c.pop - 1); c.prod = 0; c.hp = Math.max(10, c.hp - 30);
       this.msgMet([p.id], `[${p.name}]의 도시 ${c.name}에서 폭동이 일어났습니다!`);
@@ -452,6 +538,7 @@ class World {
     this.claimsDirty = true;
   }
   revolution(p) {
+    this.addTurmoil(p, 55);
     const pref = ['democracy', 'communism', 'republic', 'autocracy', 'monarchy'];
     const avail = pref.filter(g => g !== p.gov && (!R.GOVS[g].tech || p.techs[R.GOVS[g].tech]));
     const ng = avail.length ? (this.rnd() < 0.65 ? avail[0] : avail[Math.floor(this.rnd() * avail.length)]) : null;
@@ -462,6 +549,7 @@ class World {
     this.addHistory(`혁명! [${p.name}]에서 민중 혁명이 일어나 ${old}이(가) 무너지고 ${R.GOVS[ng].name}이(가) 세워졌습니다`);
   }
   coup(p) {
+    this.addTurmoil(p, 40);
     const ng = ['autocracy', 'monarchy', 'feudal'].find(g => g !== p.gov && (!R.GOVS[g].tech || p.techs[R.GOVS[g].tech]));
     p.gold = Math.floor(p.gold * 0.7);
     const mils = this.unitsOf(p.id).filter(u => this.isMil(u) && !u.inBattle);
@@ -472,6 +560,7 @@ class World {
     this.addHistory(`쿠데타! [${p.name}]에서 군부가 정권을 장악했습니다${ng ? ` (${R.GOVS[ng].name} 수립)` : ''}. 숙청으로 군대 ${purge}개가 해산되었습니다`);
   }
   secede(p, forced) {
+    this.addTurmoil(p, 30);
     const cs = this.citiesOf(p.id).filter(c => !c.capital);
     if (!cs.length) return;
     const cap = this.citiesOf(p.id).find(c => c.capital);
@@ -504,7 +593,7 @@ class World {
     for (const u of this.unitsAt(city.pos)) if (u.owner === parent.id) { u.owner = q.id; u.work = null; u.mining = false; }
     city.govr = null;
     city.owner = q.id; city.capital = true; city.queue = null; city.hp = this.cityMaxHp(city);
-    const best = R.availUnits(q.techs).filter(k => !R.UNITS[k].civ && !R.UNITS[k].rstr).sort((a, b) => R.UNITS[b].str - R.UNITS[a].str)[0] || 'warrior';
+    const best = R.availUnits(q.techs).filter(k => !R.UNITS[k].civ && !R.UNITS[k].rstr && !R.UNITS[k].sea && !R.UNITS[k].air).sort((a, b) => R.UNITS[b].str - R.UNITS[a].str)[0] || 'warrior';
     for (let i = 0; i < 2 + Math.floor(city.pop / 3); i++) this.addUnit(q.id, best, city.pos);
     for (const c of Object.values(this.corps)) if (c.hq === city.id) c.owner = q.id;
     const r = this.rel(parent.id, q.id); r.state = 'war'; r.warTurn = this.turn;
@@ -569,6 +658,8 @@ class World {
     const P = R.PROJECTS[type]; if (!P) return '잘못된 프로젝트';
     if (!p.techs[P.tech]) return `[${R.TECHS[P.tech].name}] 기술이 필요합니다`;
     if (!c.buildings.includes('launchpad')) return '발사대가 있는 도시에서만 만들 수 있습니다';
+    if (P.needLaunch && !p.launched) return '먼저 우주선을 발사해야 합니다';
+    if (P.repeat) { const q2 = this.citiesOf(p.id).filter(x => x !== c && x.queue && x.queue.kind === 'project' && x.queue.type === type).length; return q2 >= 2 ? '다른 도시에서 이미 만들고 있습니다' : null; }
     if (p.launched) return '이미 우주선을 발사했습니다';
     const queued = this.citiesOf(p.id).filter(x => x !== c && x.queue && x.queue.kind === 'project' && x.queue.type === type).length;
     if ((p.space[type] || 0) + queued >= P.max) return '이미 충분히 만들었습니다';
@@ -579,6 +670,53 @@ class World {
     for (const k in R.SPACE_NEED) if ((p.space[k] || 0) < R.SPACE_NEED[k]) return;
     p.launched = this.turn;
     this.addHistory(`우주 시대! [${p.name}]이(가) 우주선을 발사해 인류 최초로 별을 향해 떠났습니다! (영구 보너스: ${R.modText(R.SPACE_BONUS)})`);
+  }
+
+  // ── 다른 행성 ──
+  genPlanets() {
+    const out = {}, kinds = Object.keys(R.SITE_KINDS);
+    for (const [k, P] of Object.entries(R.PLANETS)) {
+      const sites = [];
+      for (let i = 0; i < P.sites; i++) {
+        let kind = kinds[Math.floor(Math.random() * kinds.length)];
+        if (i === 0 && k === 'kepler') kind = 'ruins';
+        sites.push({ kind, owner: -1, lvl: 0, since: 0, u: Math.random(), v: 0.15 + Math.random() * 0.7 });
+      }
+      out[k] = { sites, first: -1 };
+    }
+    return out;
+  }
+  colonyMax(p) { return p.techs.terraforming ? 5 : 3; }
+  coloniesOf(pid) { const out = []; for (const [k, pl] of Object.entries(this.planets)) pl.sites.forEach((st, i) => { if (st.owner === pid) out.push({ planet: k, i, st }); }); return out; }
+  colonyYield(planet, st) {
+    const P = R.PLANETS[planet], K = R.SITE_KINDS[st.kind] || { eff: {} }, y = { sci: 0, gold: 0, prod: 0, cul: 0, stock: 0 };
+    for (const k in P.yields) if (k in y) y[k] += P.yields[k] * st.lvl;
+    for (const k in K.eff) y[k] += K.eff[k];
+    y.stock = st.lvl;
+    return y;
+  }
+  colonyTotals(pid) {
+    const t = { sci: 0, gold: 0, prod: 0, cul: 0, n: 0, lvl: 0 };
+    for (const { planet, st } of this.coloniesOf(pid)) { const y = this.colonyYield(planet, st); for (const k of ['sci', 'gold', 'prod', 'cul']) t[k] += y[k]; t.n++; t.lvl += st.lvl; }
+    return t;
+  }
+  colonyDef(st) { const q = this.players[st.owner]; return 2 + st.lvl * 2 + Math.min(6, (q && q.fleet) || 0) * 1.5; }
+  processVoyages() {
+    const keep = [];
+    for (const v of this.voyages) {
+      const p = this.players[v.pid];
+      if (!p || !p.alive) continue;
+      if (v.arrive > this.turn) { keep.push(v); continue; }
+      const pl = this.planets[v.planet], st = pl && pl.sites[v.site], P = R.PLANETS[v.planet];
+      if (!st) continue;
+      if (st.owner !== -1) { p.ships = (p.ships || 0) + 1; this.msg(p.id, `${P.name}에 도착했지만 그 자리는 이미 다른 나라가 차지했습니다. 식민선이 대기 중입니다`); continue; }
+      st.owner = p.id; st.lvl = 1; st.since = this.turn;
+      if (pl.first === -1) { pl.first = p.id; this.addHistory(`[${p.name}]이(가) 인류 최초로 ${P.name}에 식민지를 세웠습니다!`); }
+      else this.msgMet([p.id], `[${p.name}]이(가) ${P.name}에 식민지를 세웠습니다`);
+      if (v.planet === 'kepler' && !this.coloniesOf(p.id).some(c => c.planet === 'kepler' && c.i !== v.site)) this.addHistory(`항성 간 문명! [${p.name}]의 식민선이 다른 별의 행성 ${P.name}에 도착했습니다`);
+      this.msg(p.id, `${P.name} 식민지 건설 완료! (${R.SITE_KINDS[st.kind].name})`);
+    }
+    this.voyages = keep;
   }
 
   // ── 사령관 ──
@@ -799,37 +937,46 @@ class World {
     return this.canEnterLand(pid, this.tileOwner(i));
   }
   reachFor(u, occ) {
+    if (this.isAir(u)) return u.moves > 0 && !u.attacked ? this.airBases(u) : new Map();
     occ = occ || this.occMap();
     const ok = i => this.canStand(u.owner, i, occ);
     const end = R.UNITS[u.type].worker ? (i => ok(i) && this.workerSlotOk(i, occ, u)) : ok;
-    return R.reach(this.W, this.H, this.terr, u.pos, u.moves, ok, end, i => this.passable(u.owner, i));
+    return R.reach(this.W, this.H, this.terr, u.pos, u.moves, ok, end, this.passFor(u));
   }
   // 근접 공격 가능 칸 (전투 시작)
-  battleTargets(pid, from) {
+  battleTargets(pid, from, sea, surprise) {
     const out = [];
     for (const j of R.neighbors(from, this.W, this.H)) {
-      if (!this.passable(pid, j)) continue;
-      if (this.battleBlock(pid, j) === null) out.push(j);
+      const ocean = this.terr[j] === 'ocean';
+      if (sea) { if (!ocean) continue; } else if (ocean || !this.passable(pid, j)) continue;
+      if (this.battleBlock(pid, j, !!surprise) === null) out.push(j);
     }
     return out;
   }
   // 공격 불가 이유 (null이면 가능)
-  battleBlock(pid, j) {
-    const c = this.cityAt.get(j);
-    const us = this.unitsAt(j).filter(x => x.owner !== pid);
-    if (!us.length && !(c && c.owner !== pid)) return '공격할 대상이 없습니다';
-    if (c && c.owner !== pid && !this.atWar(pid, c.owner)) return '전쟁 중이 아닌 나라의 도시입니다';
-    for (const x of us) if (!this.atWar(pid, x.owner)) return '전쟁 중이 아닌 나라의 유닛이 함께 있습니다';
+  battleBlock(pid, j, surprise = true) {
+    const owners = this.hostileOwners(pid, j);
+    if (!owners.size) return '공격할 대상이 없습니다';
+    for (const o of owners) {
+      if (this.atWar(pid, o)) continue;
+      if (!surprise) return '전쟁 중이 아닌 나라입니다';
+      if (this.allied(pid, o)) return '동맹국은 공격할 수 없습니다';
+      if (this.protectedP(o)) return '신규 보호 중인 나라는 공격할 수 없습니다';
+      if (!this.players[pid].met[o]) return '아직 만나지 못한 나라입니다';
+    }
     for (const b of this.battles.values()) if (b.to === j || b.from === j) return '이미 전투가 벌어지고 있는 칸입니다';
     return null;
   }
-  bombardTargets(u) {
+  bombardTargets(u, surprise) {
     const U = R.UNITS[u.type], out = [];
     if (!U.rstr || u.moves <= 0 || u.attacked || u.inBattle) return out;
     for (const j of R.inRadius(u.pos, U.range, this.W, this.H)) {
       if (j === u.pos) continue;
-      const c = this.cityAt.get(j);
-      if ((c && c.owner !== u.owner && this.atWar(u.owner, c.owner)) || this.unitsAt(j).some(x => this.atWar(u.owner, x.owner))) out.push(j);
+      const os = this.hostileOwners(u.owner, j);
+      if (!os.size) continue;
+      let ok = true;
+      for (const o of os) if (!this.atWar(u.owner, o) && !(surprise && this.canSurprise(u.owner, o))) { ok = false; break; }
+      if (ok) out.push(j);
     }
     return out;
   }
@@ -842,7 +989,7 @@ class World {
       while (q.length && dest < 0) {
         const c = q.shift();
         for (const n of R.neighbors(c, this.W, this.H)) {
-          if (seen.has(n) || !this.passable(a, n)) continue; seen.add(n);
+          if (seen.has(n) || !this.passFor(u)(n)) continue; seen.add(n);
           if (this.canStand(a, n, occ)) { dest = n; break; }
           q.push(n);
         }
@@ -856,11 +1003,11 @@ class World {
   eqAtk(u) { return u.eq && u.eq.weapon ? R.EQUIP[u.eq.weapon].atk : 0; }
   eqDef(u) { return u.eq && u.eq.armor ? R.EQUIP[u.eq.armor].def : 0; }
   hpF(u) { return 0.5 + 0.5 * Math.max(0, u.hp) / R.HPMAX; }
-  atkPow(u) { const U = R.UNITS[u.type], o = this.players[u.owner], cb = this.cmdrB(o); return ((U.rstr || U.str) + this.eqAtk(u)) * (u.vet ? 1.15 : 1) * this.hpF(u) * (1 + ((this.M(o).atkPct || 0) + cb.atk + (U.mounted ? cb.mounted : 0)) / 100); }
+  atkPow(u) { const U = R.UNITS[u.type], o = this.players[u.owner], cb = this.cmdrB(o); return ((U.atk || U.rstr || U.str) + this.eqAtk(u)) * (u.vet ? 1.15 : 1) * this.hpF(u) * (1 + ((this.M(o).atkPct || 0) + cb.atk + (U.mounted ? cb.mounted : 0)) / 100); }
   defPow(u, onHome) {
     const U = R.UNITS[u.type];
     let s = (U.str + this.eqDef(u)) * (u.vet ? 1.15 : 1) * this.hpF(u) * (1 + ((this.M(this.players[u.owner]).defPct || 0) + this.cmdrB(this.players[u.owner]).def) / 100);
-    if (this.terr[u.pos] === 'ocean') s *= 0.4;
+    if (this.terr[u.pos] === 'ocean') { if (!U.sea) s *= 0.4; }
     else if (onHome) { s *= 1 + (R.TERRAIN[this.terr[u.pos]].def || 0) / 100; if (u.fort) s *= 1.25; }
     return Math.max(1, s);
   }
@@ -878,13 +1025,19 @@ class World {
     const us = ids.map(id => this.units.get(id)).filter(u => u && u.owner === pid && this.isMil(u) && u.moves > 0 && !u.attacked && !u.inBattle);
     if (!us.length) return '공격할 수 있는 유닛이 없습니다 (이동력/이미 공격함)';
     const from = us[0].pos;
-    const att = us.filter(u => u.pos === from);
     if (R.dist(from, to, this.W) !== 1) return '붙어 있는 칸만 공격할 수 있습니다';
-    if (this.terr[from] === 'ocean') return '배 위에서는 공격할 수 없습니다 (먼저 상륙하세요)';
-    if (!this.passable(pid, to)) return '공격할 수 없는 지형입니다';
-    const why = this.battleBlock(pid, to); if (why) return why;
+    const toSea = this.terr[to] === 'ocean';
+    const att = us.filter(u => u.pos === from && !this.isAir(u) && (toSea ? this.isSea(u) : !this.isSea(u)));
+    if (!att.length) {
+      if (us.some(u => this.isAir(u))) return '항공기는 [공습]으로 공격합니다';
+      return toSea ? '바다 위의 적은 함선으로 공격하세요 (또는 포격·공습)' : '함선은 육지를 직접 공격할 수 없습니다 (사거리 함선은 포격 가능)';
+    }
+    if (!toSea && this.terr[from] === 'ocean') return '배 위에서는 육지를 공격할 수 없습니다 (먼저 상륙하세요)';
+    if (!toSea && !this.passable(pid, to)) return '공격할 수 없는 지형입니다';
+    const why = this.battleBlock(pid, to, true); if (why) return why;
+    for (const o of this.hostileOwners(pid, to)) if (!this.atWar(pid, o)) this.surpriseWar(pid, o);
     const city = this.cityAt.get(to);
-    const defs = this.unitsAt(to).filter(x => x.owner !== pid && this.isMil(x));
+    const defs = this.unitsAt(to).filter(x => x.owner !== pid && this.isMil(x) && !this.isAir(x));
     const b = { id: this.nextBattle++, att: pid, from, to, aIds: att.map(u => u.id), dIds: defs.map(u => u.id), cityId: city && city.owner !== pid ? city.id : null,
       dOwners: [...new Set([...defs.map(u => u.owner), ...(city && city.owner !== pid ? [city.owner] : [])])], round: 0, max: 3, deadline: Date.now() + BATTLE_ROUND_MS,
       last: null, over: false, result: null, loss: { a: 0, d: 0 } };
@@ -927,6 +1080,7 @@ class World {
       const Dp = isCity ? cityStr : this.defPow(target, side === 'a');
       let mod = tacMod(myTac, U) * takenMod(foeTac) * (adv === side ? 1.3 : adv ? 0.8 : 1);
       if (!isCity && U.anti && R.UNITS[target.type].mounted) mod *= 1.5;
+      if (!isCity && U.antiSub && R.UNITS[target.type].sub) mod *= 1.5;
       if (isCity && U.siege) mod *= 2;
       if (isCity) { const fu = this.units.get(f); if (fu) mod *= 1 + this.cmdrB(this.players[fu.owner]).siege / 100; }
       const dmg = clamp(Math.round(16 * R.DMG * Math.pow(aPow / Dp, 1.1) * (0.8 + this.rnd() * 0.4) * mod), 1, 80);
@@ -1011,22 +1165,43 @@ class World {
   bombard(u, target) {
     const U = R.UNITS[u.type];
     const city = this.cityAt.get(target);
+    for (const o of this.hostileOwners(u.owner, target)) if (!this.atWar(u.owner, o)) this.surpriseWar(u.owner, o);
     u.attacked = true; u.acted = true; u.moves = 0; u.fort = false; u.work = null;
     this.touched.add(u.owner);
+    let mult = 1;
+    if (U.air) {
+      const os = this.hostileOwners(u.owner, target);
+      const ints = [...this.units.values()].filter(x => os.has(x.owner) && R.UNITS[x.type].intercept && x.intercepted !== this.turn && x.hp > 0 && R.dist(x.pos, target, this.W) <= R.UNITS[x.type].range);
+      if (ints.length) {
+        const it = ints.sort((a, b) => this.atkPow(b) - this.atkPow(a))[0];
+        it.intercepted = this.turn;
+        if (U.stealth && this.rnd() < U.stealth) this.msg(u.owner, `${U.name}이(가) 적 ${R.UNITS[it.type].name}의 요격을 피했습니다`);
+        else {
+          const d1 = clamp(Math.round(10 * R.DMG * Math.pow(this.atkPow(it) / Math.max(1, this.defPow(u)), 0.7) * (0.85 + this.rnd() * 0.3)), 1, 40);
+          const d2 = clamp(Math.round(8 * R.DMG * Math.pow(U.str / Math.max(1, R.UNITS[it.type].str), 1.0)), 1, 30);
+          u.hp -= d1; it.hp -= d2; mult = 0.5;
+          this.fx(u.pos, [{ pos: u.pos, dmg: d1 }]);
+          this.msg(it.owner, `${R.UNITS[it.type].name}이(가) [${this.nm(u.owner)}]의 ${U.name}을(를) 요격했습니다 (-${d1})`);
+          this.msg(u.owner, `${U.name}이(가) 적 ${R.UNITS[it.type].name}에게 요격당했습니다 (-${d1}, 공습 위력 절반)`);
+          if (it.hp <= 0) this.killUnit(it);
+          if (u.hp <= 0) { this.killUnit(u); this.msg(u.owner, `${U.name}이(가) 격추되었습니다`); return; }
+        }
+      }
+    }
     if (city && city.owner !== u.owner && this.atWar(u.owner, city.owner)) {
       const A = this.atkPow(u) * (U.siege ? 2 : 1), D = this.cityStrength(city);
-      const dmg = clamp(Math.round(24 * R.DMG * Math.pow(A / D, 1.1) * (0.85 + this.rnd() * 0.3)), 1, 90);
+      const dmg = clamp(Math.round(24 * R.DMG * Math.pow(A / D, 1.1) * (0.85 + this.rnd() * 0.3) * mult), 1, 90);
       city.hp = Math.max(1, city.hp - dmg); city.attackedTurn = this.turn; this.touched.add(city.owner);
       this.fx(target, [{ pos: target, dmg }]);
       this.msg(city.owner, `${city.name}이(가) [${this.nm(u.owner)}]의 ${U.name}에게 포격당했습니다 (-${dmg})`);
       return;
     }
-    const foes = this.unitsAt(target).filter(x => this.atWar(u.owner, x.owner));
+    const foes = this.unitsAt(target).filter(x => this.atWar(u.owner, x.owner) && !this.isAir(x));
     const mil = foes.filter(x => this.isMil(x));
     const d = mil.length ? mil[Math.floor(this.rnd() * mil.length)] : foes[0];
     if (!d) return;
     this.touched.add(d.owner);
-    const dmg = this.isMil(d) ? clamp(Math.round(26 * R.DMG * Math.pow(this.atkPow(u) / this.defPow(d, true), 1.1) * (0.85 + this.rnd() * 0.3)), 1, 90) : 999;
+    const dmg = this.isMil(d) ? clamp(Math.round(26 * R.DMG * Math.pow(this.atkPow(u) / this.defPow(d, true), 1.1) * (0.85 + this.rnd() * 0.3) * mult * (U.antiSub && R.UNITS[d.type].sub ? 1.5 : 1)), 1, 90) : 999;
     d.hp -= dmg;
     this.fx(target, [{ pos: target, dmg }]);
     if (d.hp <= 0) { this.killUnit(d); this.msg(d.owner, `${R.UNITS[d.type].name}이(가) [${this.nm(u.owner)}]의 포격으로 전멸했습니다`); this.msg(u.owner, `포격으로 적 ${R.UNITS[d.type].name}을(를) 격파했습니다`); this.checkElimination(d.owner); }
@@ -1060,6 +1235,8 @@ class World {
   }
   captureCity(c, attacker) {
     const oldOwner = c.owner;
+    this.addTurmoil(this.players[oldOwner], 18); this.addTurmoil(this.players[attacker.owner], 6);
+    { const lo = this.players[oldOwner]; if (lo) lo.shock = (lo.shock || 0) - 6; }
     for (const u of this.unitsAt(c.pos)) {
       if (u.owner === attacker.owner) continue;
       if (this.isMil(u)) this.killUnit(u); else { u.owner = attacker.owner; u.work = null; }
@@ -1082,6 +1259,7 @@ class World {
     const A = this.players[a], B = this.players[b], r = this.rel(a, b);
     const treachery = r.peaceUntil > this.turn || r.napUntil > this.turn;
     r.state = 'war'; r.warTurn = this.turn; r.openUntil = 0; r.napUntil = 0; r.peaceUntil = 0; r.alliance = false;
+    this.addTurmoil(A, 12); this.addTurmoil(B, 15);
     this.deals = this.deals.filter(d => !((d.a === a && d.b === b) || (d.a === b && d.b === a)));
     this.props = this.props.filter(d => !((d.from === a && d.to === b) || (d.from === b && d.to === a)));
     this.addMod(B, a, 'war', -50);
@@ -1281,9 +1459,7 @@ class World {
           if (u.pos !== from || u.moves <= 0) continue;
           const rr = this.reachFor(u, occ);
           if (!rr.has(m.to)) continue;
-          const prev = occ.get(u.pos); if (prev) occ.set(u.pos, prev.filter(x => x !== u));
-          u.pos = m.to; u.moves = rr.get(m.to); u.fort = false; u.acted = true; u.skip = false; u.work = null; u.mining = false; moved++;
-          if (!occ.get(m.to)) occ.set(m.to, []); occ.get(m.to).push(u);
+          this.relocate(u, m.to, rr.get(m.to), occ); u.skip = false; u.mining = false; moved++;
         }
         if (!moved) return '이동할 수 없는 곳입니다';
         near = [from, m.to];
@@ -1294,7 +1470,9 @@ class World {
         const to = m.to | 0;
         if (to < 0 || to >= this.N) return '잘못된 위치';
         if (!p.explored[to]) return '탐험하지 않은 곳은 목적지로 정할 수 없습니다';
-        if (!this.passable(pid, to)) return R.TERRAIN[this.terr[to]].pass ? '갈 수 없는 곳입니다' : '그 바다로 가려면 항해 기술이 필요합니다';
+        if (list.some(u => this.isAir(u))) return '항공기는 목적지를 정할 수 없습니다 (도시·항공모함으로 재배치)';
+        const seaG = list.every(u => this.isSea(u));
+        if (seaG ? !(this.terr[to] === 'ocean' || this.seaPort(pid, to)) : !this.passable(pid, to)) return seaG ? '함선은 바다나 내 해안 도시로만 갈 수 있습니다' : R.TERRAIN[this.terr[to]].pass ? '갈 수 없는 곳입니다' : '그 바다로 가려면 항해 기술이 필요합니다';
         const tc = this.cityAt.get(to); if (tc && tc.owner !== pid) return '다른 나라 도시는 목적지로 정할 수 없습니다 (공격은 직접 하세요)';
         const from = list[0].pos, us = list.filter(u => u.pos === from && !u.work);
         if (!us.length) return '이동할 수 있는 유닛이 없습니다';
@@ -1319,7 +1497,7 @@ class World {
       case 'bombard': {
         if (!list || !list.length) return '유닛을 선택하세요';
         let n = 0;
-        for (const u of list) { if (!this.bombardTargets(u).includes(m.to)) continue; this.bombard(u, m.to); n++; }
+        for (const u of list) { if (!this.units.has(u.id) || !this.bombardTargets(u, true).includes(m.to)) continue; this.bombard(u, m.to); n++; }
         if (!n) return '포격할 수 있는 유닛이 없습니다';
         near = [m.to];
         break;
@@ -1421,6 +1599,7 @@ class World {
         if (!['unit', 'building', 'process', 'equip', 'project'].includes(k)) return '잘못된 항목';
         if (k === 'project') { const why = this.canProject(p, C, t); if (why) return why; }
         if (k === 'unit' && !R.availUnits(p.techs).includes(t)) return '생산할 수 없는 유닛';
+        if (k === 'unit' && R.UNITS[t].sea && !this.coastal(C)) return '함선은 해안 도시에서만 만들 수 있습니다';
         if (k === 'building' && !R.availBuildings(p.techs, C.buildings).includes(t)) return '지을 수 없는 건물';
         if (k === 'building' && R.BUILDINGS[t].coastal && !this.coastal(C)) return '해안 도시에서만 지을 수 있습니다';
         if (k === 'equip' && !R.availEquip(p.techs).includes(t)) return '제작할 수 없는 장비';
@@ -1452,6 +1631,18 @@ class World {
         }
         p.researching = m.tech; break;
       }
+      case 'researchPath': {
+        const goal = m.tech; if (!R.TECHS[goal]) return '잘못된 기술';
+        if (p.techs[goal]) return '이미 연구한 기술입니다';
+        const order = [], seen = new Set();
+        const visit = k => { if (seen.has(k) || p.techs[k]) return; seen.add(k); for (const r of R.TECHS[k].req) visit(r); order.push(k); };
+        visit(goal);
+        p.resQueue = order;
+        if (!p.researching || !order.includes(p.researching)) { p.researching = null; this.nextQueued(p); }
+        this.msg(pid, `연구 예약: [${R.TECHS[goal].name}]까지 ${order.length}개 기술을 차례로 연구합니다`);
+        break;
+      }
+      case 'clearQueue': p.resQueue = []; break;
       case 'cityShoot': {
         if (!C) return '도시 없음';
         if (C.shotTurn === this.turn) return '이번 턴에 이미 포격했습니다';
@@ -1523,6 +1714,53 @@ class World {
         this.aiArmy(p, p.cmdr.stance || 'balanced');
         this.msg(pid, `사령관 ${p.cmdr.name}이(가) 이번 턴 군대를 지휘했습니다`);
         this.claimsDirty = true;
+        break;
+      }
+      case 'colonize': {
+        const P = R.PLANETS[m.planet], pl = this.planets[m.planet]; if (!P || !pl) return '잘못된 행성';
+        if (!p.techs[P.tech]) return `[${R.TECHS[P.tech].name}] 기술이 필요합니다`;
+        if (!(p.ships > 0)) return '식민선이 없습니다 (발사대 도시에서 생산)';
+        const st = pl.sites[m.site | 0]; if (!st) return '잘못된 자리';
+        if (st.owner !== -1) return '이미 식민지가 있는 자리입니다';
+        if (this.voyages.some(v => v.pid === pid && v.planet === m.planet && v.site === (m.site | 0))) return '이미 식민선이 가고 있습니다';
+        const travel = Math.max(1, P.travel - (p.techs.warp_drive ? 2 : 0) - (this.corps.aero && this.corps.aero.owner === pid && this.corps.aero.active ? 1 : 0));
+        p.ships--; this.voyages.push({ pid, planet: m.planet, site: m.site | 0, arrive: this.turn + travel, from: this.turn });
+        this.msg(pid, `식민선이 ${P.name}(으)로 떠났습니다 (${travel}턴 후 도착)`);
+        break;
+      }
+      case 'colonyUp': {
+        const pl = this.planets[m.planet], st = pl && pl.sites[m.site | 0];
+        if (!st || st.owner !== pid) return '내 식민지가 아닙니다';
+        if (st.lvl >= this.colonyMax(p)) return st.lvl >= 5 ? '최고 레벨입니다' : '[테라포밍] 기술이 있어야 더 키울 수 있습니다';
+        const c2 = R.COLONY_UP(st.lvl);
+        if (p.gold < c2.gold) return `금이 부족합니다 (${c2.gold} 필요)`;
+        if (!R.hasRes(p.stock, c2.res)) return '자원이 부족합니다';
+        p.gold -= c2.gold; for (const k in c2.res) p.stock[k] -= c2.res[k];
+        st.lvl++; this.msg(pid, `${R.PLANETS[m.planet].name} 식민지가 ${st.lvl}레벨이 되었습니다`);
+        break;
+      }
+      case 'orbitAttack': {
+        if (!p.techs.orbital_war) return '[궤도 전쟁] 기술이 필요합니다';
+        const P = R.PLANETS[m.planet], pl = this.planets[m.planet], st = pl && pl.sites[m.site | 0];
+        if (!st || st.owner < 0 || st.owner === pid) return '공격할 식민지가 아닙니다';
+        if (!this.atWar(pid, st.owner)) return '전쟁 중인 나라의 식민지만 공격할 수 있습니다';
+        if ((p.fleetCd || 0) > this.turn) return `궤도 함대가 재정비 중입니다 (${p.fleetCd - this.turn}턴)`;
+        const n = Math.min(p.fleet || 0, Math.max(1, m.n | 0 || p.fleet || 0));
+        if (n < 1) return '궤도 함대가 없습니다 (발사대 도시에서 생산)';
+        const q = this.players[st.owner];
+        const A = n * 3 * (1 + this.cmdrB(p).atk / 100), D = this.colonyDef(st), win = this.rnd() < A / (A + D);
+        const lost = win ? Math.floor(n / 4) : Math.ceil(n / 2);
+        p.fleet -= lost; p.fleetCd = this.turn + 3;
+        if (win) {
+          st.owner = pid; st.lvl = Math.max(1, st.lvl - 1); st.since = this.turn;
+          if (q && q.fleet) q.fleet = Math.max(0, q.fleet - 1);
+          this.addHistory(`궤도 전쟁! [${p.name}]이(가) ${P.name}의 [${q ? q.name : '?'}] 식민지를 점령했습니다`);
+          this.msg(pid, `${P.name} 식민지 점령 성공! (함대 손실 ${lost})`);
+          if (q) this.msg(q.id, `${P.name}의 식민지를 [${p.name}]의 궤도 함대에 빼앗겼습니다!`);
+        } else {
+          this.msg(pid, `${P.name} 식민지 공격 실패 (함대 손실 ${lost}, 공격 ${A.toFixed(0)} vs 방어 ${D.toFixed(0)})`);
+          if (q) this.msg(q.id, `${P.name}의 식민지가 [${p.name}]의 궤도 공격을 막아냈습니다`);
+        }
         break;
       }
       case 'appoint': {
@@ -1671,11 +1909,14 @@ class World {
       this.msg(c.owner, `${c.name}: ${R.UNITS[q.type].name} 생산 완료`);
       c.prod -= cost;
       if (q.type === 'settler') { c.pop -= 1; c.queue = null; }
+      else if (p.isAI) c.queue = null;
     } else if (q.kind === 'project') {
       if (this.canProject(p, c, q.type) && !(p.space[q.type] < R.PROJECTS[q.type].max)) { c.queue = null; return; }
       for (const k in need || {}) p.stock[k] -= need[k];
-      p.space[q.type] = (p.space[q.type] || 0) + 1;
       c.prod -= cost; c.queue = null;
+      if (q.type === 'colony_ship') { p.ships = (p.ships || 0) + 1; this.msg(p.id, `${c.name}: 식민선 완성! [국정 › 행성 개척]에서 목적지를 고르세요`); return; }
+      if (q.type === 'orbital_fleet') { p.fleet = (p.fleet || 0) + 1; this.msg(p.id, `${c.name}: 궤도 함대 완성 (보유 ${p.fleet})`); return; }
+      p.space[q.type] = (p.space[q.type] || 0) + 1;
       this.msgMet([p.id], `[${p.name}]이(가) ${R.PROJECTS[q.type].name}을(를) 완성했습니다`);
       if (q.type === 'satellite') { p.explored.fill(1); this.msg(p.id, '정찰 위성이 궤도에 올라 세계 지도 전체가 공개되었습니다'); }
       this.checkLaunch(p);
@@ -1736,7 +1977,7 @@ class World {
       else if (c.food < 0) { if (c.pop > 1) { c.pop--; this.msg(p.id, `${c.name}이(가) 굶주려 인구가 줄었습니다`); } c.food = 0; }
       if (c.queue && c.queue.kind !== 'process') {
         let bonus = 0;
-        if (c.queue.kind === 'unit') bonus = R.UNITS[c.queue.type].civ ? (m.settlerPct || 0) : (m.milProdPct || 0);
+        if (c.queue.kind === 'unit') { const QU = R.UNITS[c.queue.type]; bonus = QU.civ ? (m.settlerPct || 0) : (m.milProdPct || 0); for (const b of c.buildings) { const B = R.BUILDINGS[b]; if (QU.sea && B.seaProd) bonus += B.seaProd; if (QU.air && B.airProd) bonus += B.airProd; } }
         else if (c.queue.kind === 'building') bonus = m.bldProdPct || 0;
         else if (c.queue.kind === 'project') bonus = (m.bldProdPct || 0) + (this.corps.aero && this.corps.aero.owner === p.id && this.corps.aero.active ? R.CORPS.aero.space : 0);
         c.prod += Math.round(y.prod * (1 + bonus / 100)); this.completeProduction(c, p);
@@ -1746,12 +1987,23 @@ class World {
     }
     for (const k of STOCK_KEYS) p.stock[k] += p.sgain[k];
     gpt += p.coinGain || 0;
+    { const cs0 = this.citiesOf(p.id), cap = cs0.find(c => c.capital) || cs0[0];
+      for (const { planet, st } of this.coloniesOf(p.id)) {
+        const y = this.colonyYield(planet, st);
+        gpt += y.gold; spt += y.sci; cpt += y.cul;
+        if (cap && cap.queue) cap.prod += y.prod; else gpt += Math.floor(y.prod / 2);
+        const sk = R.PLANETS[planet].stock; p.stock[sk] = (p.stock[sk] || 0) + y.stock;
+      } }
     const n = this.unitsOf(p.id).length, free = this.freeUnits(p);
     gpt -= Math.max(0, n - free);
     p.culture = (p.culture || 0) + cpt; p.cpt = cpt;
     if (p.cmdr) gpt -= 2 + p.cmdr.lvl;
     gpt -= 2 * this.citiesOf(p.id).filter(c => c.govr).length;
     for (const d of this.deals) { if (d.a === p.id) gpt += (d.bg.gpt || 0) - (d.ag.gpt || 0); if (d.b === p.id) gpt += (d.ag.gpt || 0) - (d.bg.gpt || 0); }
+    { const sf = this.sciFactors(p); spt = Math.max(0, Math.round(spt * sf.mult));
+      const was = p.sciMode || 0, now = sf.pct <= -35 ? -1 : sf.pct >= 35 ? 1 : 0;
+      if (now !== was && !p.isAI) this.msg(p.id, now < 0 ? `오랜 평화로 사회가 안주해 기술 발전이 크게 느려졌습니다 (과학 ${sf.pct}%)` : now > 0 ? `격변의 시대! 위기가 기술 발전을 앞당기고 있습니다 (과학 +${sf.pct}%)` : '기술 발전 속도가 평소대로 돌아왔습니다');
+      p.sciMode = now; }
     p.gpt = gpt; p.spt = spt;
     p.gold += gpt;
     if (p.gold < 0) {
@@ -1767,7 +2019,16 @@ class World {
       this.msg(p.id, `기술 [${R.TECHS[p.researching].name}] 연구 완료!`);
       p.researching = null;
       if (p.isAI) this.aiResearch(p);
+      else this.nextQueued(p);
     }
+    if (!p.researching && !p.isAI) this.nextQueued(p);
+  }
+  nextQueued(p) {
+    p.resQueue = (p.resQueue || []).filter(k => R.TECHS[k] && !p.techs[k]);
+    const k = p.resQueue.find(t => R.TECHS[t].req.every(r => p.techs[r]));
+    if (!k) return;
+    const err = this.act(p.id, { a: 'research', tech: k });
+    if (err && p.qWarn !== k) { p.qWarn = k; this.msg(p.id, `연구 예약: [${R.TECHS[k].name}] 시작 실패 — ${err}`); }
   }
   dealGpt(pid) { let g = 0; for (const d of this.deals) { if (d.a === pid) g += (d.bg.gpt || 0) - (d.ag.gpt || 0); if (d.b === pid) g += (d.ag.gpt || 0) - (d.bg.gpt || 0); } return g; }
   processDeals() {
@@ -1809,11 +2070,12 @@ class World {
     for (const u of this.units.values()) {
       if (u.work && this.tileOwner(u.pos) !== u.owner) u.work = null;
       if (u.mining && (this.tileOwner(u.pos) !== u.owner || !this.imp[u.pos])) u.mining = false;
-      if (!u.acted && u.hp < R.HPMAX && this.terr[u.pos] !== 'ocean') {
+      if (!u.acted && u.hp < R.HPMAX && (this.terr[u.pos] !== 'ocean' || (this.isSea(u) && this.tileOwner(u.pos) === u.owner) || u.ship)) {
         const inCity = this.cityAt.has(u.pos) && this.cityAt.get(u.pos).owner === u.owner;
+        if (this.isAir(u) && inCity && this.cityAt.get(u.pos).buildings.includes('airport')) u.hp = Math.min(R.HPMAX, u.hp + Math.round(15 * R.HPMAX / 100));
         u.hp = Math.min(R.HPMAX, u.hp + Math.round(((inCity ? 25 : this.tileOwner(u.pos) === u.owner ? 15 : 10) + (this.M(this.players[u.owner]).heal || 0) + this.cmdrB(this.players[u.owner]).heal) * R.HPMAX / 100));
       }
-      u.moves = u.work || u.mining ? 0 : this.maxMoves(u); u.attacked = false; u.acted = !!(u.work || u.mining); u.skip = false;
+      u.moves = u.work || u.mining ? 0 : this.maxMoves(u); u.attacked = false; u.intercepted = null; u.acted = !!(u.work || u.mining); u.skip = false;
     }
     this.turn++;
     // 시장 회복, 호감도 감쇠, 신뢰 회복, 조약 만료
@@ -1838,12 +2100,16 @@ class World {
     this._occ = this.occMap();
     for (const p of this.alivePlayers()) {
       if (p.shock) p.shock = Math.abs(p.shock) <= 2 ? 0 : p.shock - Math.sign(p.shock) * 2;
+      { const wars0 = this.alivePlayers().filter(q => q.id !== p.id && this.atWar(p.id, q.id)).length;
+        if (wars0) this.addTurmoil(p, Math.min(9, wars0 * 3)); if (this.anarchy(p)) this.addTurmoil(p, 4);
+        p.turmoil = Math.max(0, (p.turmoil || 0) * 0.93 - 1); p.warLoss = (p.warLoss || 0) * 0.88; }
       this.updateEstates(p);
       this.computeStability(p);
       this.stabilityEvents(p);
     }
     this._occ = null;
     if (this.claimsDirty) { this.refresh(); this.computeBorders(); }
+    this.processVoyages();
     for (const p of this.alivePlayers()) if (!p.isAI) {
       const us = this.unitsOf(p.id).filter(u => u.goto != null);
       if (us.length) { try { this.gotoMove(p, us); } catch (e) { console.error('이동 예약 오류', e); } }
@@ -1865,7 +2131,7 @@ class World {
   score(p) {
     if (!p.alive || p.removed) return 0;
     const cs = this.citiesOf(p.id);
-    return cs.length * 10 + cs.reduce((s, c) => s + c.pop * 4 + c.buildings.length * 2, 0) + Object.keys(p.techs).length * 6 + (p.policies || []).length * 4 + Object.values(this.corps).filter(c => c.owner === p.id).length * 20 + (p.launched ? 300 : 0) + (p.space && p.space.satellite ? 30 : 0) +
+    return cs.length * 10 + cs.reduce((s, c) => s + c.pop * 4 + c.buildings.length * 2, 0) + Object.keys(p.techs).length * 6 + (p.policies || []).length * 4 + Object.values(this.corps).filter(c => c.owner === p.id).length * 20 + (p.launched ? 300 : 0) + (p.space && p.space.satellite ? 30 : 0) + this.coloniesOf(p.id).reduce((s2, c) => s2 + 40 + c.st.lvl * 15 + (c.planet === 'kepler' ? 100 : 0), 0) +
       this.unitsOf(p.id).filter(u => this.isMil(u)).length;
   }
   tick() {
@@ -1908,6 +2174,7 @@ class World {
       if (u.owner !== pid && !p.visible[u.pos] && !adm) continue;
       const o = { id: u.id, o: u.owner, t: u.type, p: u.pos, hp: u.hp, mv: u.moves, mm: this.maxMoves(u), f: u.fort ? 1 : 0, a: u.attacked ? 1 : 0, v: u.vet ? 1 : 0, eq: u.eq || {}, b: u.inBattle ? 1 : 0 };
       if (u.owner === pid && u.goto != null) o.g = u.goto;
+      if (u.ship) o.sh = u.ship;
       if (u.owner === pid) { o.s = u.skip ? 1 : 0; if (u.hold) o.hd = 1; if (u.work) o.w = u.work; if (u.harv === this.turn) o.h = 1; if (u.mining) o.mi = 1; }
       if (u.mining) o.mi = 1;
       units.push(o);
@@ -1923,6 +2190,8 @@ class World {
       else if (adm) { const y = this.cityYields(c, occ); Object.assign(o, { food: c.food, need: this.foodNeed(c.pop, this.players[c.owner]), prod: c.prod, q: c.queue, qc: this.itemCost(c.queue), y, adm: 1 }); }
       cities.push(o);
     }
+    { const ct = this.colonyTotals(pid); spt += ct.sci; cpt += ct.cul; }
+    const sciF = this.sciFactors(p); spt = Math.max(0, Math.round(spt * sciF.mult));
     const myDeals = this.deals.filter(d => d.a === pid || d.b === pid);
     const st = {
       t: 'state', turn: this.turn, me: pid, speed: this.speed, left: Math.max(0, CFG.TURN_SECONDS * 1000 - (Date.now() - this.turnStart)), turnSec: CFG.TURN_SECONDS,
@@ -1941,7 +2210,8 @@ class World {
       my: { gold: p.gold, gpt: p.gpt, spt, sci: p.sciStore, techs: Object.keys(p.techs), paid: Object.keys(p.paid || {}), res: p.researching, rcost: p.researching ? this.techCost(p.researching) : 0,
         units: this.unitsOf(pid).length, free: this.freeUnits(p), alive: p.alive, mil: this.milPower(pid),
         stab: Math.round(p.stab == null ? 70 : p.stab), stabT: Math.round(p.stabT == null ? 70 : p.stabT), stabParts: p.stabParts || [], festCost: 30 + 15 * this.citiesOf(pid).length, festTurn: p.festTurn || -99,
-        space: p.space, launched: p.launched || 0,
+        space: p.space, launched: p.launched || 0, ships: p.ships || 0, fleet: p.fleet || 0, fleetCd: p.fleetCd || 0, colMax: this.colonyMax(p),
+        resQueue: p.resQueue || [], sciF: sciF, turmoil: Math.round(p.turmoil || 0),
         cmdr: p.cmdr || null, cmdrPool: p.isAI ? [] : this.cmdrPool(p), cmdrCost: this.cmdrCost(p), cmdrB: this.cmdrB(p),
         est: p.est || {}, estCd: p.estCd || {}, estCost: this.estateCost(p), govSlots: this.governorSlots(p), govCost: this.governorCost(p),
         culture: Math.floor(p.culture || 0), cpt, policies: p.policies || [], gov: p.gov, govTurn: p.govTurn, anarchy: this.anarchy(p) ? p.anarchyUntil : 0, pcost: this.policyCost(p), mods: this.M(p),
@@ -1950,6 +2220,8 @@ class World {
       props: this.props.filter(x => x.to === pid || x.from === pid),
       corps: Object.fromEntries(Object.entries(this.corps).map(([id, c]) => { const hq = this.cities.get(c.hq); return [id, { owner: c.owner, hq: c.hq, hqName: hq ? hq.name : '?', hqPos: hq ? hq.pos : -1, branches: c.branches.map(cid => { const x = this.cities.get(cid); return x ? { id: cid, name: x.name, o: x.owner } : null; }).filter(Boolean), active: c.active, income: c.income || 0 }]; })),
       history: this.history.slice(-30),
+      planets: Object.fromEntries(Object.entries(this.planets).map(([k, pl]) => [k, { first: pl.first, sites: pl.sites.map(st => ({ k: st.kind, o: st.owner, l: st.lvl, u: st.u, v: st.v, d: st.owner >= 0 ? Math.round(this.colonyDef(st)) : 0 })) }])),
+      voyages: this.voyages.map(v => ({ pid: v.pid, planet: v.planet, site: v.site, arrive: v.arrive, from: v.from })),
       space: this.players.filter(q => q.alive && !q.removed && (q.launched || (q.space && (q.space.booster || q.space.habitat || q.space.engine || q.space.satellite)))).map(q => ({ id: q.id, ...q.space, launched: q.launched || 0 })),
       deals: myDeals,
       market: Object.fromEntries(STOCK_KEYS.map(k => [k, { buy: this.buyPrice1(k, p), sell: this.sellPrice1(k, p), stock: Math.round(this.market.stock[k]) }])),
@@ -1980,7 +2252,7 @@ class World {
       }),
     };
   }
-  mapMsg() { return { t: 'map', ver: 5, W: this.W, H: this.H, terr: this.terr, res: this.res }; }
+  mapMsg() { return { t: 'map', ver: 6, W: this.W, H: this.H, terr: this.terr, res: this.res }; }
 
   // ───────────────────────── AI ─────────────────────────
   milPower(id) { let s = 0; for (const u of this.units.values()) if (u.owner === id && this.isMil(u)) { const U = R.UNITS[u.type]; s += U.str + (U.rstr || 0) + this.eqAtk(u) + this.eqDef(u); } return s; }
@@ -2025,11 +2297,12 @@ class World {
   // 이동 예약: 목적지까지 남은 이동력으로 한 걸음씩
   gotoMove(p, units, now) {
     const occ = this.occMap(), groups = new Map();
-    for (const u of units) if (u.goto != null && this.units.has(u.id) && !u.inBattle && !u.work) { if (!groups.has(u.goto)) groups.set(u.goto, []); groups.get(u.goto).push(u); }
+    for (const u of units) if (u.goto != null && this.units.has(u.id) && !u.inBattle && !u.work) { const key = u.goto + (this.isSea(u) ? 's' : ''); if (!groups.has(key)) groups.set(key, []); groups.get(key).push(u); }
     const enemyNear = i => R.neighbors(i, this.W, this.H).concat(i).some(n => this.unitsAt(n).some(x => x.owner !== p.id && this.isMil(x) && this.atWar(p.id, x.owner)));
-    for (const [to, us] of groups) {
-      if (!this.passable(p.id, to)) { for (const u of us) u.goto = null; this.msg(p.id, '목적지로 갈 수 없게 되어 이동 예약을 취소했습니다'); continue; }
-      const field = this.distField([to], 150, p);
+    for (const [key, us] of groups) {
+      const to = parseInt(key), sea = String(key).endsWith('s');
+      if (sea ? !(this.terr[to] === 'ocean' || this.seaPort(p.id, to)) : !this.passable(p.id, to)) { for (const u of us) u.goto = null; this.msg(p.id, '목적지로 갈 수 없게 되어 이동 예약을 취소했습니다'); continue; }
+      const field = sea ? this.seaField([to], p.id, 150) : this.distField([to], 150, p);
       let arrived = 0, stuck = 0, spotted = 0;
       for (const u of us) {
         const start = u.pos;
@@ -2055,8 +2328,7 @@ class World {
     let best = u.pos, bv = field[u.pos], bm = -1;
     for (const [i, rem] of rr) if (field[i] < bv - 0.01 || (Math.abs(field[i] - bv) < 0.01 && rem > bm && i !== u.pos)) { best = i; bv = field[i]; bm = rem; }
     if (best !== u.pos && bv < 1e8) {
-      const from = u.pos; u.pos = best; u.moves = rr.get(best); u.acted = true; u.fort = false; u.work = null;
-      if (occ) { const a = occ.get(from); if (a) occ.set(from, a.filter(x => x !== u)); if (!occ.get(best)) occ.set(best, []); occ.get(best).push(u); }
+      this.relocate(u, best, rr.get(best), occ);
       return true;
     }
     return false;
@@ -2070,7 +2342,7 @@ class World {
       if (this.res[j] && R.RES[this.res[j]].stock) s += 2;
     }
     if (this.terr[i] === 'hills') s += 3;
-    if (R.neighbors(i, this.W, this.H).some(n => this.terr[n] === 'ocean')) s += 2;
+    if (R.neighbors(i, this.W, this.H).some(n => this.terr[n] === 'ocean')) s += 7;
     return s;
   }
   aiDiplomacy(p, myCities) {
@@ -2090,7 +2362,8 @@ class World {
         let d = 1e9; for (const m of myCities) d = Math.min(d, R.dist(m.pos, c.pos, this.W));
         if (d < td) { td = d; tgt = c.owner; }
       }
-      if (tgt != null && td < 16 && this.milPower(p.id) > this.milPower(tgt) * 1.1 && this.rnd() < 0.35) this.declareWar(p.id, tgt);
+      const stag = this.sciFactors(p).pct <= -40; // 오래된 평화에 지친 나라는 전쟁으로 돌파구를 찾는다
+      if (tgt != null && td < (stag ? 24 : 16) && (p.stab == null || p.stab >= 40) && this.milPower(p.id) > this.milPower(tgt) * (stag ? 0.95 : 1.1) && this.rnd() < (stag ? 0.5 : 0.35)) this.declareWar(p.id, tgt);
     }
     // 평화 제안 / 동맹 / 국경 / 불가침
     for (const q of others) {
@@ -2176,10 +2449,35 @@ class World {
       if (e.loy < 35 && e.inf >= 30 && p.gold > this.estateCost(p) + 60 && this.turn - (p.estCd[k] || -99) >= 8) { p.gold -= this.estateCost(p); p.estMood = p.estMood || {}; p.estAdj = p.estAdj || {}; p.estMood[k] = (p.estMood[k] || 0) + 25; p.estAdj[k] = (p.estAdj[k] || 0) + 8; p.estCd[k] = this.turn; break; }
     }
   }
+  aiSpace(p) {
+    if (p.ships > 0) {
+      let best = null, bs = -1;
+      for (const [k, P] of Object.entries(R.PLANETS)) {
+        if (!p.techs[P.tech]) continue;
+        this.planets[k].sites.forEach((st, i) => {
+          if (st.owner !== -1 || this.voyages.some(v => v.planet === k && v.site === i)) return;
+          const sc = Object.values(P.yields).reduce((a, b) => a + b, 0) * 3 + Object.values(R.SITE_KINDS[st.kind].eff).reduce((a, b) => a + b, 0) - P.travel * 2.2 + Math.random() * 4;
+          if (sc > bs) { bs = sc; best = [k, i]; }
+        });
+      }
+      if (best) this.act(p.id, { a: 'colonize', planet: best[0], site: best[1] });
+    }
+    for (const { planet, i, st } of this.coloniesOf(p.id)) {
+      const c2 = R.COLONY_UP(st.lvl);
+      if (st.lvl < this.colonyMax(p) && p.gold > c2.gold + 120 && R.hasRes(p.stock, c2.res)) { this.act(p.id, { a: 'colonyUp', planet, site: i }); break; }
+    }
+    if (p.fleet > 0 && (p.fleetCd || 0) <= this.turn) {
+      for (const [k, pl] of Object.entries(this.planets)) {
+        const i = pl.sites.findIndex(st => st.owner >= 0 && st.owner !== p.id && this.atWar(p.id, st.owner) && p.fleet * 3 > this.colonyDef(st) * 1.2);
+        if (i >= 0) { this.act(p.id, { a: 'orbitAttack', planet: k, site: i, n: p.fleet }); break; }
+      }
+    }
+  }
   aiTurn(p) {
     if (!p.researching) this.aiResearch(p);
     this.aiCulture(p);
     this.aiEconomy(p);
+    if (p.launched) this.aiSpace(p);
     const myCities = this.citiesOf(p.id);
     this.aiDiplomacy(p, myCities);
     // 시장: 남는 것 수출
@@ -2189,29 +2487,41 @@ class World {
     const settlers = myUnits.filter(u => u.type === 'settler').length + myCities.filter(c => c.queue && c.queue.type === 'settler').length;
     const workers = myUnits.filter(u => u.type === 'worker').length + myCities.filter(c => c.queue && c.queue.type === 'worker').length;
     const canU = k => R.hasRes(p.stock, R.UNITS[k].res);
-    const avU = R.availUnits(p.techs).filter(k => !R.UNITS[k].civ && k !== 'scout');
+    const avAll = R.availUnits(p.techs).filter(k => !R.UNITS[k].civ && k !== 'scout');
+    const avU = avAll.filter(k => !R.UNITS[k].sea && !R.UNITS[k].air);
+    const pow = k => R.UNITS[k].atk || R.UNITS[k].rstr || R.UNITS[k].str;
+    const bestSea = avAll.filter(k => R.UNITS[k].sea && !R.UNITS[k].cargo && canU(k)).sort((a, b) => pow(b) - pow(a))[0];
+    const bestAir = avAll.filter(k => R.UNITS[k].air && canU(k)).sort((a, b) => pow(b) - pow(a))[0];
     const avOk = avU.filter(canU);
     const bestMelee = avOk.filter(k => !R.UNITS[k].rstr).sort((a, b) => R.UNITS[b].str - R.UNITS[a].str)[0] || 'warrior';
     const bestRanged = avOk.filter(k => R.UNITS[k].rstr).sort((a, b) => R.UNITS[b].rstr - R.UNITS[a].rstr)[0];
     const mils = myUnits.filter(u => this.isMil(u) && u.type !== 'scout');
     const wantMil = myCities.length * (enemies.length ? 3 : 1.5) + 1;
+    const nSea = mils.filter(u => this.isSea(u)).length + myCities.filter(c => c.queue && c.queue.kind === 'unit' && R.UNITS[c.queue.type].sea).length;
+    const nAir = mils.filter(u => this.isAir(u)).length + myCities.filter(c => c.queue && c.queue.kind === 'unit' && R.UNITS[c.queue.type].air).length;
+    const seaWant = enemies.length ? myCities.length * 0.8 : Math.ceil(myCities.length / 3), airWant = myCities.length * (enemies.length ? 0.9 : 0.35);
     for (const c of myCities) {
       if (c.queue && c.queue.kind !== 'process' && c.stallTurn !== this.turn && !(c.queue.kind === 'unit' && c.queue.type !== 'settler' && mils.length >= wantMil + 2)) continue;
       let q;
-      const hasGarrison = this.unitsAt(c.pos).some(u => u.owner === p.id && this.isMil(u));
+      const hasGarrison = this.unitsAt(c.pos).some(u => u.owner === p.id && this.isMil(u) && !this.isSea(u) && !this.isAir(u));
       if (!hasGarrison && mils.length < wantMil + 2) q = { kind: 'unit', type: bestMelee };
       else if (workers < Math.min(myCities.length + 1, 5) && this.turn > 2) q = { kind: 'unit', type: 'worker' };
-      else if (myCities.length + settlers < 5 && c.pop >= 2 && !enemies.length) q = { kind: 'unit', type: 'settler' };
+      else if (myCities.length + settlers < Math.max(5, Math.round(this.N / 1300)) && c.pop >= 2 && !enemies.length) q = { kind: 'unit', type: 'settler' };
       else if (mils.length < wantMil) {
         const nR = mils.filter(u => R.UNITS[u.type].rstr).length;
         let pick = bestRanged && nR < mils.length / 3 ? bestRanged : bestMelee;
         if (enemies.length && this.rnd() < 0.3) { const sg = avOk.filter(k => R.UNITS[k].siege).sort((a, b) => R.UNITS[b].rstr - R.UNITS[a].rstr)[0]; if (sg) pick = sg; }
+        if (bestSea && this.coastal(c) && nSea < seaWant && this.rnd() < 0.35) pick = bestSea;
+        else if (bestAir && nAir < airWant && this.rnd() < 0.35) pick = bestAir;
         q = { kind: 'unit', type: pick };
-      } else {
+      } else if (bestSea && this.coastal(c) && nSea < seaWant && this.rnd() < 0.3) q = { kind: 'unit', type: bestSea };
+      else if (bestAir && nAir < airWant && this.rnd() < 0.3) q = { kind: 'unit', type: bestAir };
+      else {
         const eq = R.availEquip(p.techs).filter(k => R.hasRes(p.stock, R.EQUIP[k].res));
         const armoryN = Object.values(p.armory).reduce((s, v) => s + v, 0);
         const avB = R.availBuildings(p.techs, c.buildings).filter(k => R.hasRes(p.stock, R.BUILDINGS[k].res) && (!R.BUILDINGS[k].coastal || this.coastal(c))).sort((a, b) => R.BUILDINGS[a].cost - R.BUILDINGS[b].cost);
-        const proj = c.buildings.includes('launchpad') ? Object.keys(R.PROJECTS).find(t => !this.canProject(p, c, t)) : null;
+        const freeSite = Object.entries(R.PLANETS).some(([k, P]) => p.techs[P.tech] && this.planets[k].sites.some(st => st.owner === -1));
+        const proj = c.buildings.includes('launchpad') ? Object.keys(R.PROJECTS).find(t => !this.canProject(p, c, t) && (t !== 'colony_ship' || ((p.ships || 0) < 1 && freeSite && this.coloniesOf(p.id).length < 6)) && (t !== 'orbital_fleet' || (p.fleet || 0) < 2)) : null;
         if (proj && R.hasRes(p.stock, R.PROJECTS[proj].res)) q = { kind: 'project', type: proj };
         else if (eq.length && armoryN < 2 && mils.length > 3 && this.rnd() < 0.35) q = { kind: 'equip', type: eq.sort((a, b) => R.EQUIP[b].cost - R.EQUIP[a].cost)[0] };
         else if (avB.length) q = { kind: 'building', type: avB[0] };
@@ -2263,6 +2573,8 @@ class World {
     const guardTaken = new Set();
     for (const u of this.unitsOf(p.id)) {
       if (!this.units.has(u.id) || u.inBattle || !this.isMil(u) || u.goto != null || u.hold) continue;
+      if (this.isAir(u)) { this.aiAir(p, u, stance, enemies, nearHome); continue; }
+      if (this.isSea(u)) { this.aiNaval(p, u, stance, enemies, occ, nearHome); continue; }
       const U = R.UNITS[u.type];
       const city = this.cityAt.get(u.pos);
       const isGuard = city && city.owner === p.id && !guardTaken.has(city.id);
@@ -2270,9 +2582,9 @@ class World {
       for (let step = 0; step < 4 && this.units.has(u.id) && u.moves > 0 && !u.inBattle; step++) {
         if (U.rstr) { const bt = this.bombardTargets(u).filter(t => stance !== 'defend' || nearHome(t)); if (bt.length) { this.bombard(u, bt[0]); break; } }
         if (!U.rstr && !u.attacked && this.terr[u.pos] !== 'ocean') {
-          const tg = this.battleTargets(p.id, u.pos).filter(t => stance !== 'defend' || nearHome(t));
+          const tg = this.battleTargets(p.id, u.pos, false, false).filter(t => stance !== 'defend' || nearHome(t));
           let best = null, bs = 0;
-          const stack = (occ.get(u.pos) || []).filter(x => x.owner === p.id && this.isMil(x) && x.moves > 0 && !x.attacked && !x.inBattle && this.units.has(x.id));
+          const stack = (occ.get(u.pos) || []).filter(x => x.owner === p.id && this.isMil(x) && !this.isSea(x) && !this.isAir(x) && x.moves > 0 && !x.attacked && !x.inBattle && this.units.has(x.id));
           const myPow = stack.reduce((s2, x) => s2 + this.atkPow(x), 0);
           for (const t of tg) {
             const c = this.cityAt.get(t);
@@ -2304,6 +2616,60 @@ class World {
         if (homeField && homeField[u.pos] > 3 && this.aiStepToward(u, homeField, occ)) continue;
         u.fort = true; break;
       }
+    }
+  }
+  aiAir(p, u, stance, enemies, nearHome) {
+    if (u.moves <= 0 || u.attacked) return;
+    const tg = this.bombardTargets(u, false).filter(t => stance !== 'defend' || nearHome(t));
+    if (tg.length) {
+      let best = null, bs = -1;
+      for (const t of tg) {
+        const c = this.cityAt.get(t); let sc = 0;
+        for (const x of this.unitsAt(t)) if (x.owner !== p.id && this.isMil(x) && !this.isAir(x)) sc = Math.max(sc, this.atkPow(x) * (1.5 - x.hp / R.HPMAX));
+        if (c && c.owner !== p.id) sc = Math.max(sc, 20 + (1 - c.hp / this.cityMaxHp(c)) * 30);
+        if (sc > bs) { bs = sc; best = t; }
+      }
+      if (best != null && (u.hp > R.HPMAX * 0.35)) { this.bombard(u, best); return; }
+    }
+    if (!enemies.length) return;
+    const foes = [...this.cities.values()].filter(c => enemies.includes(c.owner)).map(c => c.pos);
+    if (!foes.length) return;
+    const dmin = i => Math.min(...foes.map(f => R.dist(i, f, this.W)));
+    const here = dmin(u.pos), R0 = R.UNITS[u.type].range;
+    if (here <= R0) return;
+    let best = null, bd = here;
+    for (const [b] of this.airBases(u)) { const d = dmin(b); if (d < bd - 1) { bd = d; best = b; } }
+    if (best != null) this.relocate(u, best, 0, null);
+  }
+  aiNaval(p, u, stance, enemies, occ, nearHome) {
+    const U = R.UNITS[u.type];
+    for (let step = 0; step < 4 && this.units.has(u.id) && u.moves > 0 && !u.inBattle; step++) {
+      if (U.rstr) { const bt = this.bombardTargets(u, false).filter(t => stance !== 'defend' || nearHome(t)); if (bt.length) { this.bombard(u, bt[0]); break; } }
+      if (!U.rstr && !U.cargo && !u.attacked && this.terr[u.pos] === 'ocean' || (!U.rstr && !U.cargo && !u.attacked && this.cityAt.has(u.pos))) {
+        const tg = this.battleTargets(p.id, u.pos, true, false).filter(t => stance !== 'defend' || nearHome(t));
+        const stack = (occ.get(u.pos) || []).filter(x => x.owner === p.id && this.isSea(x) && !R.UNITS[x.type].cargo && x.moves > 0 && !x.attacked && !x.inBattle && this.units.has(x.id));
+        const myPow = stack.reduce((a, x) => a + this.atkPow(x), 0);
+        let best = null, bs = 0;
+        for (const t of tg) { const ds = this.unitsAt(t).filter(x => x.owner !== p.id && this.isMil(x) && !this.isAir(x)); const dp = ds.reduce((a, x) => a + this.defPow(x, true), 0) || 1; if (myPow / dp > bs) { bs = myPow / dp; best = t; } }
+        if (best != null && bs > 1.15) { this.startBattle(p.id, stack.map(x => x.id), best); break; }
+      }
+      if (u.hp < R.HPMAX * 0.45 || !enemies.length || stance === 'defend') {
+        const ports = this.citiesOf(p.id).filter(c => this.coastal(c)).map(c => c.pos);
+        if (u.hp < R.HPMAX * 0.45 && ports.length && !ports.includes(u.pos)) { if (!this.aiStepToward(u, this.seaField(ports, p.id, 40), occ)) break; continue; }
+        if (!enemies.length && this.tileOwner(u.pos) !== p.id && ports.length) { if (!this.aiStepToward(u, this.seaField(ports, p.id, 40), occ)) break; continue; }
+        u.fort = true; break;
+      }
+      if (!this._navF || this._navF.turn !== this.turn || this._navF.pid !== p.id) {
+        const src = [];
+        for (const x of this.units.values()) if (enemies.includes(x.owner) && this.terr[x.pos] === 'ocean') src.push(x.pos);
+        for (const c of this.cities.values()) if (enemies.includes(c.owner)) for (const n of R.neighbors(c.pos, this.W, this.H)) if (this.terr[n] === 'ocean') src.push(n);
+        this._navF = { turn: this.turn, pid: p.id, f: src.length ? this.seaField(src, p.id, 50) : null };
+      }
+      const f = this._navF.f;
+      if (!f || f[u.pos] >= 1e8) { u.fort = true; break; }
+      if (U.rstr && f[u.pos] <= Math.max(1, U.range - 1)) break;
+      if (U.cargo && f[u.pos] <= 4) break;
+      if (!this.aiStepToward(u, f, occ)) break;
     }
   }
   aiWorker(p, u, occ) {
@@ -2399,14 +2765,14 @@ function migrate(s) {
     if (c.hp > R.CITY_HP + 80) c.hp = Math.round(c.hp * 0.6);
     if (c.queue && ((c.queue.kind === 'unit' && !R.UNITS[c.queue.type]) || (c.queue.kind === 'building' && !R.BUILDINGS[c.queue.type]))) c.queue = null;
   }
-  s.v = 5;
+  s.v = 6;
   return s;
 }
 async function loadWorld() {
   let data = null, from = '';
   if (useGist) { try { data = await loadFromGist(); from = 'Gist'; } catch (e) { console.error(e.message); } }
   if (!data) { try { if (fs.existsSync(SAVE_FILE)) { data = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8')); from = '로컬 파일'; } } catch (e) { console.error('로컬 저장 읽기 실패', e.message); } }
-  if (data && data.v < 5 && !process.env.KEEP_OLD_MAP) { console.log('맵이 커지고 바다가 넓어진 새 버전이라 새 세계를 만듭니다 (예전 맵을 유지하려면 KEEP_OLD_MAP=1)'); data = null; }
+  if (data && data.v < 6 && !process.env.KEEP_OLD_MAP) { console.log('맵이 대륙 2개로 커진 새 버전이라 새 세계를 만듭니다 (예전 맵을 유지하려면 KEEP_OLD_MAP=1)'); data = null; }
   if (data && data.v >= 2 && data.players && data.W) {
     try { const w = new World(migrate(data)); console.log(`저장된 세계를 불러왔습니다 (${from}, ${w.turn}턴, 문명 ${w.alivePlayers().length}개)`); return w; }
     catch (e) { console.error('저장 파일 변환 실패, 새 세계를 만듭니다', e); }
