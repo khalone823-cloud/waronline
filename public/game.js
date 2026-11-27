@@ -1398,7 +1398,7 @@ function qName(q) {
 function renderAdmBox() {
   const b = $('#admBox'); if (!b) return;
   if (adminOn) b.innerHTML = `<div class="row" style="gap:6px"><button class="wide" id="admOpen">${ic('eye', 15)} 관리자 화면</button><button id="admOff" class="danger">끄기</button></div>`;
-  else b.innerHTML = `<div class="mut" style="font-size:12px;margin-bottom:6px">${ic('lock', 12)} 관리자 코드 (서버 ADMIN_CODE)</div><div class="row" style="gap:6px"><input id="admCode" type="password" autocomplete="off" placeholder="코드 입력" style="flex:1;min-width:0"><button id="admGo">확인</button></div>`;
+  else b.innerHTML = `<div class="mut" style="font-size:12px;margin-bottom:6px">${ic('lock', 12)} 관리자 코드 (채팅창에 쳐도 켜집니다)</div><div class="row" style="gap:6px"><input id="admCode" type="password" autocomplete="off" placeholder="코드 입력" style="flex:1;min-width:0"><button id="admGo">확인</button></div>`;
   const go = () => { const v = $('#admCode').value; if (!v) return; sendMsg({ t: 'admin', code: v }); $('#admCode').value = ''; };
   if ($('#admGo')) { $('#admGo').onclick = go; $('#admCode').onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') go(); }; }
   if ($('#admOpen')) $('#admOpen').onclick = () => { $('#mMenu').classList.remove('on'); openAdmin(); };
