@@ -2484,6 +2484,23 @@ function onConnection(ws) {
     if (p && p.ws === ws) { p.ws = null; p._admin = false; p.lastSeen = Date.now(); world.markAll(); world.checkEarlyTurn(); }
   });
 }
+const adminCode = () => process.env.ADMIN_CODE || 'khalonee';
+function sameCode(a, b) { const h = x => crypto.createHash('sha256').update(String(x)).digest(); return crypto.timingSafeEqual(h(a || ''), h(b)); }
+function setAdmin(ws, me, on) {
+  me._admin = on; me.sentFog = me.sentOwner = me.sentImp = null; world.dirty.add(me.id);
+  if (on) console.log('관리자 모드 켬', me.name);
+  send(ws, { t: 'admin', on });
+}
+function tryAdmin(ws, me, code) {
+  const now = Date.now();
+  if (ws._admLock && now < ws._admLock) return send(ws, { t: 'error', msg: `잘못된 코드를 여러 번 입력했습니다. ${Math.ceil((ws._admLock - now) / 1000)}초 후 다시 시도하세요` });
+  if (!sameCode(code, adminCode())) {
+    ws._admTries = (ws._admTries || 0) + 1;
+    if (ws._admTries >= 5) { ws._admLock = now + 60000; ws._admTries = 0; }
+    return send(ws, { t: 'error', msg: '관리자 코드가 틀렸습니다' });
+  }
+  ws._admTries = 0; setAdmin(ws, me, true);
+}
 function handle(ws, m) {
   switch (m.t) {
     case 'ping': send(ws, { t: 'pong' }); return;
@@ -2507,23 +2524,17 @@ function handle(ws, m) {
   if (!me || me.ws !== ws) return;
   me.lastSeen = Date.now();
   switch (m.t) {
-    case 'chat': { const text = String(m.text || '').slice(0, 200).trim(); if (text) chatMsg(me.name, text, me.color); return; }
+    case 'chat': {
+      const text = String(m.text || '').slice(0, 200).trim();
+      if (!text) return;
+      // 채팅창에 관리자 코드를 치면 관리자 모드 (다른 사람에게는 보이지 않음)
+      if (sameCode(text, adminCode())) { tryAdmin(ws, me, text); return; }
+      if (me._admin && (text === '/관리자끄기' || text === '/admin off')) { setAdmin(ws, me, false); return; }
+      chatMsg(me.name, text, me.color); return;
+    }
     case 'admin': {
-      if (m.off) { me._admin = false; me.sentFog = me.sentOwner = me.sentImp = null; world.dirty.add(me.id); send(ws, { t: 'admin', on: false }); return; }
-      const code = process.env.ADMIN_CODE;
-      if (!code) return send(ws, { t: 'error', msg: '서버에 ADMIN_CODE 환경 변수가 설정되어 있지 않습니다 (Render › Environment에서 추가)' });
-      const now = Date.now();
-      if (ws._admLock && now < ws._admLock) return send(ws, { t: 'error', msg: `잘못된 코드를 여러 번 입력했습니다. ${Math.ceil((ws._admLock - now) / 1000)}초 후 다시 시도하세요` });
-      const h = x => crypto.createHash('sha256').update(String(x)).digest();
-      if (!crypto.timingSafeEqual(h(m.code || ''), h(code))) {
-        ws._admTries = (ws._admTries || 0) + 1;
-        if (ws._admTries >= 5) { ws._admLock = now + 60000; ws._admTries = 0; }
-        console.log('관리자 코드 실패', me.name);
-        return send(ws, { t: 'error', msg: '관리자 코드가 틀렸습니다' });
-      }
-      ws._admTries = 0; me._admin = true; me.sentFog = me.sentOwner = me.sentImp = null; world.dirty.add(me.id);
-      console.log('관리자 모드 켬', me.name);
-      send(ws, { t: 'admin', on: true });
+      if (m.off) { setAdmin(ws, me, false); return; }
+      tryAdmin(ws, me, m.code);
       return;
     }
     case 'leave': me._admin = false; me.ws = null; ws.pid = null; send(ws, { t: 'left' }); world.markAll(); return;
