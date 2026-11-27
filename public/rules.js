@@ -68,6 +68,23 @@
     tank:      { name: '전차대',   cost: 360, str: 70, moves: 4, tech: 'combustion', res: { iron: 3, coal: 2 }, desc: '현대 기갑 부대' },
     mech_inf:  { name: '기계화 보병', cost: 340, str: 62, moves: 3, tech: 'plastics', res: { iron: 2, coal: 1 } },
     giant_robot:{ name: '거대 전투 로봇', cost: 480, str: 110, moves: 3, tech: 'robotics', res: { iron: 4, copper: 4 }, desc: '미래 병기' },
+    // ── 해군 (바다에서만 이동, 해안 도시에서 생산) ──
+    galley:    { name: '갈레선',     cost: 45,  str: 9,  moves: 3, sea: true, tech: 'sailing', obs: 'shipbuilding', res: { wood: 2 }, desc: '해안을 지키는 노 젓는 배' },
+    trireme:   { name: '삼단노선',   cost: 70,  str: 15, moves: 4, sea: true, tech: 'shipbuilding', obs: 'steam_ships', res: { wood: 2, copper: 1 }, desc: '충각으로 적선을 들이받는 고대 군함' },
+    caravel:   { name: '캐러벨',     cost: 90,  str: 16, moves: 5, sight: 3, sea: true, tech: 'navigation', obs: 'steam_ships', res: { wood: 3 }, desc: '먼바다 탐험선 · 시야 3' },
+    frigate:   { name: '프리깃',     cost: 150, str: 22, rstr: 28, range: 2, moves: 5, sea: true, tech: 'naval_tactics', obs: 'dreadnought', res: { wood: 2, iron: 1, saltpeter: 1 }, desc: '함포로 배·해안을 포격 (사거리 2)' },
+    ironclad:  { name: '철갑함',     cost: 210, str: 40, moves: 5, sea: true, tech: 'steam_ships', obs: 'dreadnought', res: { iron: 3, coal: 1 }, desc: '증기 기관의 강철 군함' },
+    destroyer: { name: '구축함',     cost: 300, str: 62, moves: 7, sea: true, tech: 'dreadnought', antiSub: true, res: { iron: 3, coal: 1 }, desc: '빠른 호위함 · 잠수함 상대 +50%' },
+    battleship:{ name: '전함',       cost: 390, str: 58, rstr: 78, range: 3, moves: 5, sea: true, tech: 'dreadnought', res: { iron: 4, coal: 2 }, desc: '거대한 함포 (사거리 3) · 해안 도시 포격' },
+    submarine: { name: '잠수함',     cost: 300, str: 28, atk: 82, moves: 5, sea: true, sub: true, tech: 'submarines', res: { iron: 3 }, desc: '어뢰 공격 매우 강함, 방어 약함' },
+    carrier:   { name: '항공모함',   cost: 420, str: 42, moves: 5, sea: true, cargo: 3, tech: 'carrier_ops', res: { iron: 4, copper: 2 }, desc: '항공기 3대를 싣고 다니는 바다 위 기지' },
+    missile_cruiser: { name: '미사일 순양함', cost: 540, str: 82, rstr: 115, range: 4, moves: 6, sea: true, tech: 'guided_missiles', res: { iron: 4, copper: 4 }, desc: '유도 미사일 (사거리 4)' },
+    // ── 공군 (도시·항공모함에 주둔, 사거리 안 어디든 공습) ──
+    fighter:   { name: '전투기',     cost: 320, str: 30, rstr: 52, range: 6, moves: 1, air: true, intercept: true, tech: 'aviation', obs: 'jet_engine', res: { iron: 2, coal: 1 }, desc: '공습 + 사거리 안 적 항공기 요격' },
+    bomber:    { name: '폭격기',     cost: 380, str: 18, rstr: 88, range: 8, moves: 1, air: true, siege: true, tech: 'aviation', obs: 'stealth', res: { iron: 3, coal: 1 }, desc: '강력한 폭격 (사거리 8) · 도시 공격 2배' },
+    jet_fighter:{ name: '제트 전투기', cost: 460, str: 48, rstr: 82, range: 8, moves: 1, air: true, intercept: true, tech: 'jet_engine', res: { iron: 3, copper: 2 }, desc: '고속 요격·공습 (사거리 8)' },
+    stealth_bomber:{ name: '스텔스 폭격기', cost: 620, str: 30, rstr: 135, range: 12, moves: 1, air: true, siege: true, stealth: 0.7, tech: 'stealth', res: { iron: 3, copper: 4 }, desc: '요격을 70% 피함 (사거리 12)' },
+    drone:     { name: '공격 드론',   cost: 260, str: 14, rstr: 62, range: 6, moves: 1, air: true, tech: 'drones', res: { copper: 2, iron: 1 }, desc: '싸고 정밀한 무인 공습' },
     rocket_art:{ name: '로켓 포병', cost: 320, str: 22, rstr: 60, range: 3, moves: 2, siege: true, tech: 'rocketry', res: { iron: 2, coal: 2, saltpeter: 1 }, desc: '사거리 3, 도시 공격 2배' },
   };
 
@@ -91,7 +108,15 @@
     animal:          { name: '목축',       era: 0, cost: 30,  req: ['agriculture'], desc: '말 목장' },
     archery:         { name: '궁술',       era: 0, cost: 30,  req: ['agriculture'] },
     mining:          { name: '채광',       era: 0, cost: 30,  req: ['agriculture'], desc: '구리·석재·금 광산' },
-    sailing:         { name: '돛단배',     era: 0, cost: 45,  req: ['pottery'], desc: '얕은 바다(해안 2칸) 항해' },
+    sailing:         { name: '돛단배',     era: 0, cost: 45,  req: ['pottery'], desc: '얕은 바다(해안 2칸) 항해 · 갈레선' },
+    shipbuilding:    { name: '조선술',     era: 1, cost: 95,  req: ['sailing', 'bronze'], res: { wood: 4 }, bonus: { seaMove: 1 }, desc: '삼단노선 · 조선소' },
+    cartography:     { name: '지도 제작',  era: 2, cost: 170, req: ['shipbuilding', 'math'], bonus: { seaMove: 1, tradeOp: 2 }, desc: '함선 이동력 +1' },
+    naval_tactics:   { name: '해군 전술',  era: 3, cost: 290, req: ['navigation', 'gunpowder'], res: { wood: 4, iron: 2 }, desc: '프리깃 (함포)' },
+    steam_ships:     { name: '증기선',     era: 4, cost: 420, req: ['steam', 'naval_tactics'], res: { iron: 6, coal: 4 }, bonus: { seaMove: 1 }, desc: '철갑함 · 함선 이동력 +1' },
+    dreadnought:     { name: '근대 해군',  era: 5, cost: 660, req: ['steam_ships', 'electricity'], res: { iron: 8, coal: 4 }, desc: '구축함 · 전함' },
+    submarines:      { name: '잠수함 기술', era: 5, cost: 720, req: ['dreadnought', 'combustion'], res: { iron: 6 }, desc: '잠수함' },
+    carrier_ops:     { name: '항공모함 운용', era: 5, cost: 820, req: ['dreadnought', 'aviation'], res: { iron: 8, copper: 4 }, desc: '항공모함 (항공기 3대 탑재)' },
+    jet_engine:      { name: '제트 엔진',  era: 5, cost: 840, req: ['aviation', 'plastics'], res: { iron: 6, copper: 4 }, bonus: { atkPct: 5 }, desc: '제트 전투기' },
     calendar:        { name: '역법',       era: 0, cost: 50,  req: ['pottery'], bonus: { growthPct: 5 } },
     trapping:        { name: '덫 사냥',    era: 0, cost: 45,  req: ['animal'], bonus: { goldPct: 3 } },
     mysticism:       { name: '신비주의',   era: 0, cost: 45,  req: ['pottery'], bonus: { cityCul: 1 } },
@@ -124,7 +149,7 @@
     economics:       { name: '경제학',     era: 3, cost: 280, req: ['banking', 'printing'], bonus: { marketCut: 5 } },
     physics:         { name: '물리학',     era: 3, cost: 280, req: ['astronomy', 'printing'], bonus: { sciPct: 5 } },
     acoustics:       { name: '음향학',     era: 3, cost: 260, req: ['printing', 'drama'], bonus: { culPct: 10 } },
-    navigation:      { name: '항해술',     era: 3, cost: 270, req: ['astronomy', 'optics', 'sailing'], bonus: { marketCut: 5, tradeOp: 3 }, desc: '먼바다 항해' },
+    navigation:      { name: '항해술',     era: 3, cost: 270, req: ['astronomy', 'optics', 'cartography'], bonus: { marketCut: 5, tradeOp: 3 }, desc: '먼바다 항해 · 캐러벨' },
     chemistry:       { name: '화학',       era: 3, cost: 290, req: ['gunpowder', 'physics'], bonus: { foodPct: 5 } },
     metallurgy:      { name: '야금술',     era: 3, cost: 300, req: ['gunpowder'], res: { coal: 4, iron: 4 } },
     social_contract: { name: '사회계약론', era: 3, cost: 300, req: ['economics', 'civil'] },
@@ -137,6 +162,20 @@
     archaeology:     { name: '고고학',     era: 4, cost: 420, req: ['acoustics', 'nationalism'] },
     biology:         { name: '생물학',     era: 4, cost: 440, req: ['chemistry', 'medicine'], bonus: { growthPct: 10 } },
     dynamite:        { name: '다이너마이트', era: 4, cost: 460, req: ['rifling', 'industry'], res: { saltpeter: 6, coal: 6 } },
+    telegraph:       { name: '전신',       era: 4, cost: 410, req: ['steam', 'physics'], res: { copper: 4 }, bonus: { goldPct: 3, tradeOp: 3 }, desc: '전선을 따라 소식이 순식간에 퍼집니다' },
+    railroad:        { name: '철도',       era: 4, cost: 450, req: ['steam', 'industry'], res: { iron: 8, coal: 4 }, bonus: { cityProd: 1, settlerPct: 15 }, desc: '모든 도시 생산 +1' },
+    vaccination:     { name: '백신',       era: 4, cost: 460, req: ['medicine', 'biology'], bonus: { growthPct: 10, heal: 3 }, desc: '전염병이 줄어 도시가 빨리 자랍니다' },
+    telephone:       { name: '전화',       era: 5, cost: 580, req: ['telegraph', 'electricity'], res: { copper: 6 }, bonus: { goldPct: 5, tradeOp: 3 } },
+    nuclear_physics: { name: '원자물리학', era: 5, cost: 640, req: ['electricity', 'chemistry'], bonus: { sciPct: 5 } },
+    penicillin:      { name: '항생제',     era: 5, cost: 620, req: ['vaccination', 'refrigeration'], bonus: { growthPct: 10, heal: 5 } },
+    mass_media:      { name: '대중매체',   era: 5, cost: 660, req: ['radio', 'ideology'], bonus: { culPct: 10, stability: 3 } },
+    aviation:        { name: '항공',       era: 5, cost: 700, req: ['combustion', 'radio'], res: { iron: 8 }, bonus: { atkPct: 5 }, desc: '전투기 · 폭격기 · 공항' },
+    transistor:      { name: '트랜지스터', era: 5, cost: 700, req: ['electronics', 'nuclear_physics'], res: { copper: 6 }, bonus: { sciPct: 5 } },
+    nuclear_power:   { name: '원자력',     era: 5, cost: 780, req: ['nuclear_physics', 'electronics'], res: { iron: 8, copper: 6 }, bonus: { prodPct: 5 }, desc: '원자력 발전소 건설' },
+    semiconductor:   { name: '반도체',     era: 5, cost: 800, req: ['transistor', 'plastics'], res: { copper: 10, stone: 2 }, bonus: { sciPct: 5, prodPct: 5 }, desc: '반도체 공장 건설' },
+    automation:      { name: '자동화',     era: 5, cost: 820, req: ['computers', 'combustion'], res: { iron: 8 }, bonus: { prodPct: 10, bldProdPct: 10 } },
+    genetics:        { name: '유전공학',   era: 5, cost: 840, req: ['penicillin', 'computers'], bonus: { foodPct: 10, growthPct: 10 } },
+    internet:        { name: '인터넷',     era: 5, cost: 900, req: ['computers', 'telephone', 'semiconductor'], res: { copper: 10 }, bonus: { sciPct: 10, culPct: 5, tradeOp: 5 }, desc: '데이터센터 건설' },
     electricity:     { name: '전기',       era: 5, cost: 520, req: ['steam', 'physics'], res: { copper: 6 }, bonus: { prodPct: 5 } },
     ideology:        { name: '이념',       era: 5, cost: 540, req: ['nationalism', 'industry'] },
     replaceable:     { name: '대량 징병',  era: 5, cost: 560, req: ['dynamite', 'electricity'], res: { iron: 6, coal: 4 } },
@@ -148,12 +187,26 @@
     plastics:        { name: '플라스틱',   era: 5, cost: 700, req: ['refrigeration', 'combustion'] },
     corporation:     { name: '기업 경영',  era: 4, cost: 440, req: ['economics', 'industry'], bonus: { goldPct: 5 }, desc: '기업 설립' },
     globalization:   { name: '세계화',     era: 5, cost: 850, req: ['computers', 'ideology'], bonus: { tradeOp: 10, marketCut: 10, goldPct: 10 } },
+    guided_missiles: { name: '유도 미사일', era: 6, cost: 1100, req: ['rocketry', 'computers'], res: { iron: 6, copper: 6 }, desc: '미사일 순양함' },
+    stealth:         { name: '스텔스',     era: 6, cost: 1250, req: ['jet_engine', 'semiconductor'], res: { copper: 8 }, desc: '스텔스 폭격기' },
+    drones:          { name: '무인기',     era: 6, cost: 1200, req: ['machine_learning', 'jet_engine'], res: { copper: 6 }, desc: '공격 드론' },
+    mobile:          { name: '이동통신',   era: 6, cost: 980, req: ['internet', 'satellites'], res: { copper: 8, stone: 2 }, bonus: { goldPct: 10, stability: 3 } },
+    renewable:       { name: '재생에너지', era: 6, cost: 1000, req: ['semiconductor', 'globalization'], res: { copper: 10 }, bonus: { prodPct: 5, stability: 3 } },
+    machine_learning:{ name: '기계학습',   era: 6, cost: 1150, req: ['internet', 'robotics'], bonus: { sciPct: 10 } },
+    big_data:        { name: '빅데이터',   era: 6, cost: 1100, req: ['internet', 'mobile'], bonus: { goldPct: 5, sciPct: 5, marketCut: 5 } },
+    autonomous:      { name: '자율주행',   era: 6, cost: 1250, req: ['machine_learning', 'robotics'], bonus: { improveSpeed: 1, settlerPct: 20, milProdPct: 10 } },
+    quantum:         { name: '양자 컴퓨터', era: 6, cost: 1500, req: ['machine_learning', 'nanotech'], res: { stone: 4, copper: 10 }, bonus: { sciPct: 15 } },
+    agi:             { name: '범용 인공지능', era: 6, cost: 2100, req: ['ai_tech', 'quantum'], res: { stone: 6, copper: 14 }, bonus: { sciPct: 20, prodPct: 10, goldPct: 10 }, desc: '기술적 특이점' },
     rocketry:        { name: '로켓 공학',  era: 6, cost: 760, req: ['combustion', 'electricity'], res: { iron: 8, coal: 6 }, desc: '발사대 건설' },
     satellites:      { name: '인공위성',   era: 6, cost: 900, req: ['rocketry', 'computers'], res: { copper: 10 }, bonus: { sciPct: 5 } },
     space_flight:    { name: '우주 비행',  era: 6, cost: 1050, req: ['satellites', 'globalization'], res: { iron: 10, copper: 10 }, desc: '우주선 부품' },
     robotics:        { name: '로봇 공학',  era: 6, cost: 1100, req: ['computers', 'plastics', 'rocketry'], res: { iron: 10, copper: 10 }, bonus: { prodPct: 10 } },
     nanotech:        { name: '나노기술',   era: 6, cost: 1300, req: ['robotics', 'satellites'], bonus: { sciPct: 10, defPct: 10 } },
-    ai_tech:         { name: '인공지능',   era: 6, cost: 1500, req: ['nanotech', 'space_flight'], bonus: { sciPct: 15, goldPct: 10, stability: 5 } },
+    ai_tech:         { name: '인공지능',   era: 6, cost: 1500, req: ['nanotech', 'space_flight', 'machine_learning'], bonus: { sciPct: 15, goldPct: 10, stability: 5 } },
+    interplanetary:  { name: '행성 간 추진', era: 6, cost: 1700, req: ['fusion', 'ai_tech'], res: { iron: 12, copper: 12 }, bonus: { sciPct: 5 }, desc: '식민선 건조 · 달·화성 개척 (우주선 발사 후)' },
+    terraforming:    { name: '테라포밍',   era: 6, cost: 1900, req: ['interplanetary', 'nanotech'], res: { copper: 14, coal: 10 }, bonus: { foodPct: 10 }, desc: '금성·유로파·타이탄 개척, 식민지 최대 레벨 5' },
+    orbital_war:     { name: '궤도 전쟁',  era: 6, cost: 1800, req: ['interplanetary', 'robotics'], res: { iron: 16 }, bonus: { atkPct: 5 }, desc: '궤도 함대 건조 · 적 식민지 공격' },
+    warp_drive:      { name: '항성 간 항법', era: 6, cost: 2400, req: ['terraforming', 'orbital_war'], res: { copper: 20, iron: 20 }, bonus: { sciPct: 10, culPct: 10 }, desc: '다른 별의 행성 케플러-442b 개척' },
     fusion:          { name: '핵융합',     era: 6, cost: 1250, req: ['space_flight'], res: { copper: 12, coal: 10 }, bonus: { prodPct: 10 }, desc: '핵융합 엔진' },
   };
 
@@ -163,6 +216,8 @@
     temple:         { name: '사원',           cost: 50,  res: { wood: 2, stone: 1 }, tech: 'mysticism', desc: '문화 +2', cul: 2 },
     barracks:       { name: '병영',           cost: 60,  res: { wood: 3 }, tech: 'bronze', desc: '생산 유닛 전투력 +15%' },
     forge:          { name: '대장간',         cost: 90,  res: { stone: 3, iron: 2 }, tech: 'guilds', desc: '생산 +2', prod: 2 },
+    shipyard:       { name: '조선소',         cost: 120, res: { wood: 6, iron: 1 }, tech: 'shipbuilding', coastal: true, req: 'harbor', desc: '해안 전용 · 생산 +2, 함선 생산 +40%', prod: 2, seaProd: 40 },
+    airport:        { name: '공항',           cost: 360, res: { iron: 6, copper: 4 }, tech: 'aviation', desc: '생산 +2, 항공기 생산 +40%, 주둔 항공기 회복 +15', prod: 2, airProd: 40 },
     harbor:         { name: '항구',           cost: 70,  res: { wood: 4 }, tech: 'sailing', coastal: true, desc: '해안 도시 전용 · 식량 +2, 금 +2', food: 2, gold: 2 },
     library:        { name: '도서관',         cost: 70,  res: { wood: 2 }, tech: 'writing', desc: '과학 +3', sci: 3 },
     walls:          { name: '성벽',           cost: 70,  res: { stone: 4 }, tech: 'masonry', desc: '방어 +8, 체력 +30', def: 8, hp: 30 },
@@ -185,6 +240,9 @@
     power_plant:    { name: '발전소',         cost: 320, res: { iron: 6, coal: 6, copper: 4 }, tech: 'electricity', req: 'factory', desc: '생산 +8', prod: 8 },
     broadcast:      { name: '방송국',         cost: 340, res: { copper: 6, iron: 4 }, tech: 'radio', desc: '문화 +8', cul: 8 },
     launchpad:      { name: '발사대',         cost: 300, res: { iron: 8, copper: 6, coal: 4 }, tech: 'rocketry', desc: '우주 프로젝트 가능' },
+    nuclear_plant:  { name: '원자력 발전소',  cost: 420, res: { iron: 8, copper: 6 }, tech: 'nuclear_power', req: 'power_plant', desc: '생산 +12', prod: 12 },
+    chip_fab:       { name: '반도체 공장',    cost: 440, res: { copper: 10, stone: 2 }, tech: 'semiconductor', req: 'factory', desc: '생산 +5, 금 +6', prod: 5, gold: 6 },
+    datacenter:     { name: '데이터센터',     cost: 480, res: { copper: 10, iron: 4 }, tech: 'internet', req: 'research_lab', desc: '과학 +12, 금 +3', sci: 12, gold: 3 },
     research_lab:   { name: '연구소',         cost: 400, res: { copper: 8, iron: 4 }, tech: 'computers', req: 'university', desc: '과학 +10', sci: 10 },
   };
 
@@ -196,7 +254,7 @@
     growthPct: ['도시 성장 속도', '%'], settlerPct: ['개척자·일꾼 생산', '%'], milProdPct: ['군사 유닛 생산', '%'], bldProdPct: ['건물 생산', '%'],
     atkPct: ['공격력', '%'], defPct: ['방어력', '%'], cityDefPct: ['도시 방어력', '%'], heal: ['유닛 회복', ''], upkeepFree: ['무료 유지 유닛', ''],
     buyCut: ['구매 비용 할인', '%'], marketCut: ['시장 거래 이득', '%'], tradeOp: ['다른 문명의 태도', ''], trustRegen: ['신뢰 회복', ''],
-    vetPct: ['정예 유닛 확률', '%'], stability: ['안정도', ''], improveSpeed: ['시설 건설 단축(턴)', ''], stockCap: ['도시당 채굴 시설', ''],
+    vetPct: ['정예 유닛 확률', '%'], seaMove: ['함선 이동력', ''], stability: ['안정도', ''], improveSpeed: ['시설 건설 단축(턴)', ''], stockCap: ['도시당 채굴 시설', ''],
   };
   const GOVS = {
     tribal:     { name: '부족 연맹', era: 0, bloc: 'old',  mods: { upkeepFree: 1 }, desc: '시작 체제. 특별한 장단점이 없습니다' },
@@ -258,7 +316,28 @@
     booster:   { name: '우주선 추진체',    cost: 500, res: { iron: 8, coal: 6 }, tech: 'space_flight', max: 3, desc: '우주선 부품 (3개 필요)' },
     habitat:   { name: '우주선 거주 모듈', cost: 600, res: { copper: 6, iron: 6 }, tech: 'space_flight', max: 1, desc: '우주선 부품 (1개 필요)' },
     engine:    { name: '핵융합 엔진',      cost: 800, res: { iron: 8, copper: 8 }, tech: 'fusion', max: 1, desc: '우주선 부품 (1개 필요)' },
+    colony_ship:   { name: '식민선',     cost: 700, res: { iron: 10, copper: 8, wood: 6 }, tech: 'interplanetary', max: 99, repeat: true, needLaunch: true, desc: '다른 행성에 식민지를 세웁니다 (우주선 발사 후)' },
+    orbital_fleet: { name: '궤도 함대',  cost: 650, res: { iron: 14, coal: 6 }, tech: 'orbital_war', max: 99, repeat: true, needLaunch: true, desc: '내 식민지를 지키고 전쟁 중인 나라의 식민지를 공격' },
   };
+  // 다른 행성: 거리(이동 턴), 식민지 자리 수, 식민지 1레벨당 산출, 특산 자원
+  const PLANETS = {
+    moon:   { name: '달',          tech: 'interplanetary', travel: 3,  sites: 6, yields: { sci: 3, gold: 1 }, stock: 'stone',  color: ['#d6d3cc', '#8b8780'], ring: 0, desc: '가장 가까운 위성. 과학 기지에 알맞습니다' },
+    mars:   { name: '화성',        tech: 'interplanetary', travel: 6,  sites: 8, yields: { prod: 2, gold: 2 }, stock: 'iron',  color: ['#e2794b', '#7a2e17'], ring: 0, desc: '붉은 행성. 철이 풍부합니다' },
+    venus:  { name: '금성',        tech: 'terraforming',   travel: 6,  sites: 5, yields: { gold: 5 }, stock: 'copper',          color: ['#f2d58a', '#a07a2c'], ring: 0, desc: '두꺼운 구름 아래의 부유 도시. 무역의 중심' },
+    europa: { name: '유로파',      tech: 'terraforming',   travel: 10, sites: 5, yields: { sci: 5, cul: 1 }, stock: 'saltpeter', color: ['#e8f1fa', '#8aa9c9'], ring: 0, desc: '얼음 아래 바다. 생명의 흔적을 연구합니다' },
+    titan:  { name: '타이탄',      tech: 'terraforming',   travel: 12, sites: 6, yields: { prod: 3, gold: 1 }, stock: 'coal', color: ['#e0a54d', '#7b4a17'], ring: 1, desc: '토성의 위성. 탄화수소 바다' },
+    kepler: { name: '케플러-442b', tech: 'warp_drive',     travel: 18, sites: 10, yields: { food: 0, sci: 4, gold: 4, prod: 2, cul: 3 }, stock: 'horse', color: ['#5fb36a', '#1f4f6e'], ring: 0, star: 1, desc: '다른 별의 지구형 행성. 인류의 두 번째 고향' },
+  };
+  const SITE_KINDS = {
+    plain:   { name: '평원',      eff: {} },
+    crater:  { name: '충돌구',    eff: { prod: 1 } },
+    ice:     { name: '얼음 지대', eff: { sci: 2 } },
+    metal:   { name: '금속 광맥', eff: { prod: 2 } },
+    gas:     { name: '가스 분출구', eff: { gold: 2 } },
+    ruins:   { name: '고대 유적', eff: { cul: 3, sci: 1 } },
+    crystal: { name: '결정 동굴', eff: { gold: 1, cul: 1, sci: 1 } },
+  };
+  const COLONY_UP = lvl => ({ gold: 120 * lvl, res: { iron: 4 * lvl, copper: 3 * lvl } });
   const SPACE_NEED = { booster: 3, habitat: 1, engine: 1 };
   const SPACE_BONUS = { sciPct: 20, culPct: 20, stability: 10 };
   // 기업: 본사 도시에서 설립, 지사를 늘릴수록 수익. 매 턴 원료 소비
@@ -464,7 +543,7 @@
   }
 
   const R = { TERRAIN, STOCK, RES, IMPS, IMP_BY_CODE, UNITS, EQUIP, SLOTS, ERAS, TECHS, BUILDINGS, PROCESSES, TACTICS, CIVS, SPEEDS, TREATY,
-    HPMAX, DMG, CITY_HP, GOVERNORS, ESTATES, GOV_ESTATES, TREE_ESTATE, CMDR_TRAITS, CMDR_NAMES, CMDR_STANCE, CMDR_MODE, shallowMap, MOD_TEXT, GOVS, POLICY_TREES, POLICY, PROJECTS, SPACE_NEED, SPACE_BONUS, CORPS, CORP_COST, policyCost, sumMods, modText,
+    HPMAX, DMG, CITY_HP, GOVERNORS, ESTATES, GOV_ESTATES, TREE_ESTATE, CMDR_TRAITS, CMDR_NAMES, CMDR_STANCE, CMDR_MODE, shallowMap, MOD_TEXT, GOVS, POLICY_TREES, POLICY, PROJECTS, PLANETS, SITE_KINDS, COLONY_UP, SPACE_NEED, SPACE_BONUS, CORPS, CORP_COST, policyCost, sumMods, modText,
     neighbors, dist, inRadius, reach, impFor, impTechOk, hasRes, availUnits, availBuildings, availEquip, availTechs, canEquip };
   if (typeof module !== 'undefined' && module.exports) module.exports = R;
   else root.RULES = R;

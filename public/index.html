@@ -98,8 +98,9 @@ input[type=number]{width:62px;padding:4px 6px}
 .acts{display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:8px}
 .acts button{justify-content:flex-start;font-size:13px}
 .acts button.wide{grid-column:span 2}
-.tabs{display:flex;gap:4px;padding:8px 12px 0;border-bottom:1px solid var(--line)}
-.tabs button{border-radius:8px 8px 0 0;border-bottom:none;background:transparent;border-color:transparent;color:var(--mut);padding:6px 10px;font-size:13px}
+.tabs{display:flex;gap:4px;padding:8px 12px 0;border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{white-space:nowrap;flex:none;border-radius:8px 8px 0 0;border-bottom:none;background:transparent;border-color:transparent;color:var(--mut);padding:6px 10px;font-size:13px}
 .tabs button.on{background:var(--p2);border-color:var(--line);color:var(--text)}
 .plist{display:flex;flex-direction:column;gap:4px}
 .pitem{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:9px;background:var(--p2);border:1px solid var(--line);cursor:pointer;text-align:left;width:100%;justify-content:flex-start}
@@ -133,6 +134,23 @@ input[type=number]{width:62px;padding:4px 6px}
 .mbody{padding:14px 16px}
 .tech{display:flex;gap:12px;overflow-x:auto;padding-bottom:6px}
 .tcol{display:flex;flex-direction:column;gap:8px;min-width:180px}
+.ttree{position:relative;overflow:auto;flex:1;min-height:260px;border:1px solid var(--line);border-radius:12px;background:radial-gradient(circle at 30% 20%,#141c33,#0a0f1e);touch-action:pan-x pan-y;cursor:grab}
+.ttree .tin{position:relative}
+.ttree svg{position:absolute;left:0;top:0;pointer-events:none}
+.ttree .eraband{position:absolute;top:0;bottom:0;border-right:1px dashed #ffffff14}
+.ttree .erah{position:absolute;top:8px;font-size:12px;font-weight:800;letter-spacing:.08em;color:#9fb0dc;text-transform:uppercase;white-space:nowrap}
+.tn{position:absolute;width:150px;height:52px;border-radius:10px;border:1px solid #2a3558;background:#151d33;padding:5px 8px 5px 11px;font-size:11px;color:var(--mut);cursor:pointer;overflow:hidden;transition:transform .12s,box-shadow .12s}
+.tn:before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--ec)}
+.tn b{display:block;color:var(--text);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tn .tu{position:absolute;right:5px;bottom:4px;display:flex;gap:2px;opacity:.85}
+.tn.known{background:#11261b;border-color:#2c6b47}.tn.known b{color:#9ff0c0}
+.tn.avail{border-color:#5d74c4;box-shadow:0 0 0 1px #5d74c455}.tn.avail:hover{transform:translateY(-1px);border-color:var(--gold)}
+.tn.res{border-color:var(--gold);background:#2d2512;box-shadow:0 0 14px #f0c35a55}
+.tn.locked{opacity:.55}
+.tn.q{border-color:#e879f9;box-shadow:0 0 0 1px #e879f955}
+.tn.hl{opacity:1;box-shadow:0 0 0 2px #e879f9,0 0 16px #e879f966}
+.tn.sel{box-shadow:0 0 0 2px #fff,0 0 18px #ffffff55;opacity:1}
+.tdetail{margin-top:8px;border:1px solid var(--line);border-radius:12px;background:var(--p2);padding:10px 12px;min-height:72px;font-size:12.5px}
 .tc{border:1px solid var(--line);border-radius:10px;padding:9px;background:var(--p2);font-size:12px}
 .tc b{font-size:14px;display:flex;align-items:center;gap:6px}
 .tc.known{background:#122419;border-color:#24543a}
@@ -266,7 +284,7 @@ input[type=number]{width:62px;padding:4px 6px}
   <div id="tileTip"></div>
 </div>
 
-<div class="modal" id="mTech"><div class="mbox"><div class="mhead"><h2 id="techTitle"></h2><div class="sp"></div><button class="ghost" data-close></button></div><div class="mbody"><div class="mut" id="techInfo" style="margin-bottom:12px"></div><div class="tech" id="techTree"></div></div></div></div>
+<div class="modal" id="mTech"><div class="mbox" style="max-width:min(1400px,100%);display:flex;flex-direction:column;height:100%"><div class="mhead"><h2 id="techTitle"></h2><div class="sp"></div><button class="ghost" data-close></button></div><div class="mbody" style="display:flex;flex-direction:column;flex:1;min-height:0;padding-bottom:10px"><div class="mut" id="techInfo" style="margin-bottom:8px;font-size:12.5px"></div><div id="techTree" class="ttree"></div><div id="techDetail" class="tdetail"></div></div></div></div>
 <div class="modal" id="mIdeo"><div class="mbox" style="max-width:980px"><div class="mhead"><h2 id="ideoTitle"></h2><div class="sp"></div><button class="ghost" data-close></button></div>
   <div class="tabs" id="ideoTabs"></div><div class="mbody" id="ideoBody"></div></div></div>
 <div class="modal" id="mNation"><div class="mbox" style="max-width:860px"><div class="mhead"><h2 id="natTitle"></h2><div class="sp"></div><button class="ghost" data-close></button></div>
