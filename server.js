@@ -9,11 +9,18 @@ const R = require('./public/rules.js');
 
 const PORT = process.env.PORT || 3000;
 const PUB = path.join(__dirname, 'public');
+const AI_LEVELS = {
+  dumb:   { yield: 0.55, combat: 0.75, attack: 2.0, act: 0.45, war: 0.08, warRatio: 1.8, expand: 4, mil: 0.6, navy: 0.3, smart: 0.3, blunder: 0.35 },
+  easy:   { yield: 0.75, combat: 0.9,  attack: 1.5, act: 0.7,  war: 0.18, warRatio: 1.4, expand: 5, mil: 0.8, navy: 0.6, smart: 0.6, blunder: 0.15 },
+  normal: { yield: 1,    combat: 1,    attack: 1.15, act: 1,   war: 0.35, warRatio: 1.1, expand: 99, mil: 1, navy: 1, smart: 1, blunder: 0 },
+};
 const CFG = {
   W: +process.env.WORLD_W || 120,                   // 월드 가로 칸 수
   H: +process.env.WORLD_H || 76,                   // 월드 세로 칸 수
   TURN_SECONDS: +process.env.TURN_SECONDS || 30,   // 월드 턴 간격 (초)
   AI_COUNT: process.env.AI_COUNT != null ? +process.env.AI_COUNT : 6, // 항상 유지할 AI 문명 수
+  RESET_TAG: process.env.RESET_TAG || 'reset-2026-11-28', // 이 값이 바뀌면 다음 시작 때 세계를 한 번 새로 만듦
+  AI_LEVEL: process.env.AI_LEVEL || 'dumb', // dumb(매우 멍청) | easy | normal
   PROTECT_TURNS: +process.env.PROTECT_TURNS || 60, // 신규 보호 턴
   INACTIVE_HOURS: +process.env.INACTIVE_HOURS || 72, // 이 시간 동안 접속 없으면 제국 소멸
   SPEED: process.env.SPEED || 'normal',
@@ -201,9 +208,10 @@ class World {
   }
 
   // ── 저장/불러오기 ──
+  get AI() { return AI_LEVELS[CFG.AI_LEVEL] || AI_LEVELS.dumb; }
   serialize() {
     return JSON.stringify({
-      v: 6, W: this.W, H: this.H, seed: this.seed, terr: this.terr, res: this.res, imp: this.imp, turn: this.turn, nextId: this.nextId, created: this.created,
+      v: 6, resetTag: CFG.RESET_TAG, W: this.W, H: this.H, seed: this.seed, terr: this.terr, res: this.res, imp: this.imp, turn: this.turn, nextId: this.nextId, created: this.created,
       rels: this.rels, deals: this.deals, props: this.props, market: this.market, corps: this.corps, history: this.history, planets: this.planets, voyages: this.voyages,
       players: this.players.map(p => {
         const o = {}; for (const k of Object.keys(p)) if (!k.startsWith('_') && !['ws', 'visible', 'baseVis', 'explored', 'sentFog', 'sentOwner', 'sentImp'].includes(k)) o[k] = p[k];
@@ -883,6 +891,7 @@ class World {
     food = pct(food, 'foodPct'); prod = pct(prod, 'prodPct'); gold = pct(gold, 'goldPct'); sci = pct(sci, 'sciPct'); cul = pct(cul, 'culPct');
     if (c.queue && c.queue.kind === 'process') { const half = Math.floor(prod / 2); if (c.queue.type === 'wealth') gold += half; else sci += half; }
     if (this.anarchy(p)) { gold = Math.floor(gold / 4); sci = Math.floor(sci / 4); cul = 0; }
+    if (p.isAI && !p.rebel) { const f = this.AI.yield; prod = Math.max(1, Math.floor(prod * f)); gold = Math.floor(gold * f); sci = Math.floor(sci * f); cul = Math.floor(cul * f); food = Math.floor(food * (0.5 + f / 2)); }
     return { food, prod, gold, sci, cul, upkeep: c.pop * 2 };
   }
   itemDef(q) {
@@ -1003,10 +1012,10 @@ class World {
   eqAtk(u) { return u.eq && u.eq.weapon ? R.EQUIP[u.eq.weapon].atk : 0; }
   eqDef(u) { return u.eq && u.eq.armor ? R.EQUIP[u.eq.armor].def : 0; }
   hpF(u) { return 0.5 + 0.5 * Math.max(0, u.hp) / R.HPMAX; }
-  atkPow(u) { const U = R.UNITS[u.type], o = this.players[u.owner], cb = this.cmdrB(o); return ((U.atk || U.rstr || U.str) + this.eqAtk(u)) * (u.vet ? 1.15 : 1) * this.hpF(u) * (1 + ((this.M(o).atkPct || 0) + cb.atk + (U.mounted ? cb.mounted : 0)) / 100); }
+  atkPow(u) { const U = R.UNITS[u.type], o = this.players[u.owner], cb = this.cmdrB(o); return (o && o.isAI ? this.AI.combat : 1) * ((U.atk || U.rstr || U.str) + this.eqAtk(u)) * (u.vet ? 1.15 : 1) * this.hpF(u) * (1 + ((this.M(o).atkPct || 0) + cb.atk + (U.mounted ? cb.mounted : 0)) / 100); }
   defPow(u, onHome) {
     const U = R.UNITS[u.type];
-    let s = (U.str + this.eqDef(u)) * (u.vet ? 1.15 : 1) * this.hpF(u) * (1 + ((this.M(this.players[u.owner]).defPct || 0) + this.cmdrB(this.players[u.owner]).def) / 100);
+    let s = (this.players[u.owner] && this.players[u.owner].isAI ? this.AI.combat : 1) * (U.str + this.eqDef(u)) * (u.vet ? 1.15 : 1) * this.hpF(u) * (1 + ((this.M(this.players[u.owner]).defPct || 0) + this.cmdrB(this.players[u.owner]).def) / 100);
     if (this.terr[u.pos] === 'ocean') { if (!U.sea) s *= 0.4; }
     else if (onHome) { s *= 1 + (R.TERRAIN[this.terr[u.pos]].def || 0) / 100; if (u.fort) s *= 1.25; }
     return Math.max(1, s);
@@ -1146,7 +1155,8 @@ class World {
     const read = this.cmdrB(this.players[b.att]).read;
     while (!b.over && guard++ < 10) {
       const d = this.pickWeighted(this.defWeights(b));
-      const t = read && this.rnd() < read ? this.counterOf(d) : this.rnd() < 0.6 ? this.counterOf(b.hint) : ['charge', 'volley', 'shield'][Math.floor(this.rnd() * 3)];
+      const ap = this.players[b.att], smart = ap && ap.isAI ? 0.6 * this.AI.smart : 0.6;
+      const t = read && this.rnd() < read ? this.counterOf(d) : this.rnd() < smart ? this.counterOf(b.hint) : ['charge', 'volley', 'shield'][Math.floor(this.rnd() * 3)];
       this.battleRound(b, t, d);
     }
   }
@@ -2260,6 +2270,7 @@ class World {
     const av = R.availTechs(p.techs);
     const prio = { sailing: -5, bronze: -20, archery: -15, writing: -10, iron: -15, math: -10, pottery: -5, currency: -5, gunpowder: -30, education: -10, mining: -25, animal: -8 };
     av.sort((a, b) => (R.TECHS[a].cost + (prio[a] || 0)) - (R.TECHS[b].cost + (prio[b] || 0)));
+    if (this.rnd() > this.AI.smart) av.sort(() => this.rnd() - 0.5);
     for (const k of av) {
       const need = R.TECHS[k].res;
       if (!need || p.paid[k]) { p.researching = k; return; }
@@ -2363,7 +2374,8 @@ class World {
         if (d < td) { td = d; tgt = c.owner; }
       }
       const stag = this.sciFactors(p).pct <= -40; // 오래된 평화에 지친 나라는 전쟁으로 돌파구를 찾는다
-      if (tgt != null && td < (stag ? 24 : 16) && (p.stab == null || p.stab >= 40) && this.milPower(p.id) > this.milPower(tgt) * (stag ? 0.95 : 1.1) && this.rnd() < (stag ? 0.5 : 0.35)) this.declareWar(p.id, tgt);
+      const A = this.AI, human = tgt != null && !this.players[tgt].isAI;
+      if (tgt != null && td < (stag ? 24 : 16) && (p.stab == null || p.stab >= 40) && this.milPower(p.id) > this.milPower(tgt) * (stag ? Math.max(0.95, A.warRatio - 0.2) : A.warRatio) && this.rnd() < (stag ? A.war * 1.4 : A.war) * (human ? 0.5 : 1)) this.declareWar(p.id, tgt);
     }
     // 평화 제안 / 동맹 / 국경 / 불가침
     for (const q of others) {
@@ -2496,17 +2508,17 @@ class World {
     const bestMelee = avOk.filter(k => !R.UNITS[k].rstr).sort((a, b) => R.UNITS[b].str - R.UNITS[a].str)[0] || 'warrior';
     const bestRanged = avOk.filter(k => R.UNITS[k].rstr).sort((a, b) => R.UNITS[b].rstr - R.UNITS[a].rstr)[0];
     const mils = myUnits.filter(u => this.isMil(u) && u.type !== 'scout');
-    const wantMil = myCities.length * (enemies.length ? 3 : 1.5) + 1;
+    const wantMil = (myCities.length * (enemies.length ? 3 : 1.5) + 1) * this.AI.mil;
     const nSea = mils.filter(u => this.isSea(u)).length + myCities.filter(c => c.queue && c.queue.kind === 'unit' && R.UNITS[c.queue.type].sea).length;
     const nAir = mils.filter(u => this.isAir(u)).length + myCities.filter(c => c.queue && c.queue.kind === 'unit' && R.UNITS[c.queue.type].air).length;
-    const seaWant = enemies.length ? myCities.length * 0.8 : Math.ceil(myCities.length / 3), airWant = myCities.length * (enemies.length ? 0.9 : 0.35);
+    const seaWant = (enemies.length ? myCities.length * 0.8 : Math.ceil(myCities.length / 3)) * this.AI.navy, airWant = myCities.length * (enemies.length ? 0.9 : 0.35) * this.AI.navy;
     for (const c of myCities) {
       if (c.queue && c.queue.kind !== 'process' && c.stallTurn !== this.turn && !(c.queue.kind === 'unit' && c.queue.type !== 'settler' && mils.length >= wantMil + 2)) continue;
       let q;
       const hasGarrison = this.unitsAt(c.pos).some(u => u.owner === p.id && this.isMil(u) && !this.isSea(u) && !this.isAir(u));
       if (!hasGarrison && mils.length < wantMil + 2) q = { kind: 'unit', type: bestMelee };
       else if (workers < Math.min(myCities.length + 1, 5) && this.turn > 2) q = { kind: 'unit', type: 'worker' };
-      else if (myCities.length + settlers < Math.max(5, Math.round(this.N / 1300)) && c.pop >= 2 && !enemies.length) q = { kind: 'unit', type: 'settler' };
+      else if (myCities.length + settlers < Math.min(this.AI.expand, Math.max(5, Math.round(this.N / 1300))) && c.pop >= 2 && !enemies.length) q = { kind: 'unit', type: 'settler' };
       else if (mils.length < wantMil) {
         const nR = mils.filter(u => R.UNITS[u.type].rstr).length;
         let pick = bestRanged && nR < mils.length / 3 ? bestRanged : bestMelee;
@@ -2567,12 +2579,15 @@ class World {
     const unguarded = myCities.filter(c => !this.unitsAt(c.pos).some(x => x.owner === p.id && this.isMil(x)));
     const guardField = unguarded.length ? this.distField(unguarded.map(c => c.pos), 40, p) : null;
     const nearHome = t => this.tileOwner(t) === p.id || myCities.some(c => R.dist(c.pos, t, this.W) <= 3);
-    const threshold = stance === 'attack' ? 1.05 : stance === 'defend' ? 1.0 : stance === 'balanced' ? 1.2 : 1.15;
+    const dumbAI = stance === 'ai' && p.isAI, AIc = this.AI;
+    const threshold = stance === 'attack' ? 1.05 : stance === 'defend' ? 1.0 : stance === 'balanced' ? 1.2 : AIc.attack;
     const marchLimit = stance === 'attack' || stance === 'ai' ? 30 : stance === 'balanced' ? 9 : 0;
     let exploreField = null;
     const guardTaken = new Set();
     for (const u of this.unitsOf(p.id)) {
       if (!this.units.has(u.id) || u.inBattle || !this.isMil(u) || u.goto != null || u.hold) continue;
+      if (dumbAI && this.rnd() > AIc.act) continue; // 멍하니 서 있음
+      if (dumbAI && this.rnd() < AIc.blunder) { const n = R.neighbors(u.pos, this.W, this.H).filter(i => this.passFor(u)(i) && this.canStand(p.id, i, occ, u)); if (n.length) { this.relocate(u, n[Math.floor(this.rnd() * n.length)], 0, occ); continue; } } // 엉뚱한 곳으로 감
       if (this.isAir(u)) { this.aiAir(p, u, stance, enemies, nearHome); continue; }
       if (this.isSea(u)) { this.aiNaval(p, u, stance, enemies, occ, nearHome); continue; }
       const U = R.UNITS[u.type];
@@ -2772,6 +2787,7 @@ async function loadWorld() {
   let data = null, from = '';
   if (useGist) { try { data = await loadFromGist(); from = 'Gist'; } catch (e) { console.error(e.message); } }
   if (!data) { try { if (fs.existsSync(SAVE_FILE)) { data = JSON.parse(fs.readFileSync(SAVE_FILE, 'utf8')); from = '로컬 파일'; } } catch (e) { console.error('로컬 저장 읽기 실패', e.message); } }
+  if (data && data.resetTag !== CFG.RESET_TAG) { console.log(`초기화 표시(RESET_TAG=${CFG.RESET_TAG})가 바뀌어 새 세계를 만듭니다`); data = null; }
   if (data && data.v < 6 && !process.env.KEEP_OLD_MAP) { console.log('맵이 대륙 2개로 커진 새 버전이라 새 세계를 만듭니다 (예전 맵을 유지하려면 KEEP_OLD_MAP=1)'); data = null; }
   if (data && data.v >= 2 && data.players && data.W) {
     try { const w = new World(migrate(data)); console.log(`저장된 세계를 불러왔습니다 (${from}, ${w.turn}턴, 문명 ${w.alivePlayers().length}개)`); return w; }
